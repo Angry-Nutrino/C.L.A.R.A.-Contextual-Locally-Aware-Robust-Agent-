@@ -35,6 +35,7 @@ You have access to the following tools:
 2. Web Search: This tool is used to search anything on the web. To use the tool call : web_search["your_question"]
 3. Time and Date: This tool is used to find the Realtime Date and time. To use the tool call: date_time[]
 4. Vision Analysis: This tool analyzes the content of images. To use the tool call: vision_tool["Image_path","Your question about the image"]
+5. Consult Archive: This tool is used to look up the information at local archives. To use the tool call: consult_archive["your_question"]
 
 
 ### Task ###
@@ -111,6 +112,13 @@ Observation: 0.4873
 Thought: I now have the ```price of Bitcoin which is $92,366.50 USD``` and the ```number of coins that can be bought with $45,000 USD which is approximately 0.4873 coins```, thsi is enough information to answer the user. 
 Final Answer: You can buy approximately 0.4873 Bitcoin coins with an investment of $45,000 USD at the current price of $92,366.50 USD per coin.
 ### Constraints ###
+
+User:Consult the archive and tell me what technical skills I have listed in my resume.
+Thought: To find the technical skills listed in the user's resume, I need to use the consult_archive tool to search the local archives for this information.
+Action: consult_archive["technical skills in resume"]
+Observation: "technical skills Machine Learning   Python, Java"
+Thought: I have the ```technical skills listed in the resume which are Machine Learning, Python, Java```. I can now provide the final answer.
+Final Answer: The technical skills listed in your resume are Machine Learning, Python, and Java.
 
 1. **NO HALLUCINATION:** You are limited to the tools listed above. NEVER invent new tools (e.g., do not call 'google_search', 'calculator', or 'time_now'). If a tool is not listed, you cannot use it.
 
@@ -267,7 +275,8 @@ Final Answer: You can buy approximately 0.4873 Bitcoin coins with an investment 
             gatekeeper_prompt = (
                         f"User Query: '{query}'\n"
                         "Analyze this request properly, if it is a TASK or CHAT:\n"
-                        "Hint: A multi step chat is also a TASK, a single question is CHAT.\n"
+                        "Hint 1: A multi step chat is also a TASK, a single question is CHAT.\n"
+                        "Hint 2: if a tool is needed to answer the question, it is a TASK.\n"
                         "Output an XML block like the format given below:\n"
                         "<analysis>\n"
                         "  <intent>TASK or CHAT</intent>\n"

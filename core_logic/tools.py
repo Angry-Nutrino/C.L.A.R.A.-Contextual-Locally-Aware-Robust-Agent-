@@ -49,18 +49,27 @@ def web_search(query: str):
 def get_time_date() -> str:
     return datetime.now()
 
-def consult_archive(query:str)->str:
+def consult_archive(query: str) -> str:
     global RAG_ENGINE
     global DB_PATH
+    
     if RAG_ENGINE is None:
         if os.path.exists(DB_PATH):
-            embeddings= HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-            RAG_ENGINE= FAISS.load_local(DB_PATH, embeddings)
+            print("   [Archive] 🔌 Loading Vector Database into RAM...")
+            embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+            RAG_ENGINE = FAISS.load_local(
+                DB_PATH, 
+                embeddings, 
+                allow_dangerous_deserialization=True 
+            )
         else:
-            return "Knowledge base not found. Please build the knowledge base first by running the rag.py."
+            return "Error: Knowledge base not found. Please run 'rag.py' first."
     
-    result = RAG_ENGINE.similarity_search(query, k=3)
-    return "\n".join([doc.page_content for doc in result])
+    print(f"   [Archive] 🧠 Searching for: '{query}'")
+    results = RAG_ENGINE.similarity_search(query, k=3)
+    
+    # Pro-tip: Join with a separator so the LLM knows where one chunk ends and another begins
+    return "\n---\n".join([doc.page_content for doc in results])
 
 # res= consult_archive("I need the exact burst pressure specifications for the explosion vent. What is the specified burst pressure, and what is the maximum tolerance listed in the Declaration of Conformity?")
 # print(res)
