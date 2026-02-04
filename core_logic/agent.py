@@ -8,7 +8,7 @@ import os
 from dotenv import load_dotenv
 from xai_sdk import Client
 from xai_sdk.chat import user, system, assistant
-from crud import crud
+from .crud import crud
 load_dotenv()
 
 class Clara_Agent:
@@ -34,7 +34,7 @@ You have access to the following tools:
 1. Python Repl: This tool is used to execute python code. To use the tool call : python_repl[your_python_code], Usage: python_repl[import math; print(len("hello"))], RULES: Use 'len(str)', NOT 'str.len()'. Use 'print()' to see output. Re-import libraries every time.
 2. Web Search: This tool is used to search anything on the web. To use the tool call : web_search["your_question"]
 3. Time and Date: This tool is used to find the Realtime Date and time. To use the tool call: date_time[]
-4. Vision Analysis: This tool is analyze the content of images. To use the tool call: vision_tool["Image_path","Your question about the image"]
+4. Vision Analysis: This tool analyzes the content of images. To use the tool call: vision_tool["Image_path","Your question about the image"]
 
 
 ### Task ###
@@ -106,7 +106,7 @@ Thought: To find the current price of Bitcoin, I need to use the web_search tool
 Action: web_search["current price of Bitcoin"]
 Observation: The current price of Bitcoin is $92,366.50 USD.
 Thought: I have the ```current price of Bitcoin which is $92,366.50 USD```. Now I will calculate how many coins can be bought with $45,000 USD using the python_repl tool.
-Action: python_repl[print(45000 / 92366.50)]\
+Action: python_repl[print(45000 / 92366.50)]
 Observation: 0.4873
 Thought: I now have the ```price of Bitcoin which is $92,366.50 USD``` and the ```number of coins that can be bought with $45,000 USD which is approximately 0.4873 coins```, thsi is enough information to answer the user. 
 Final Answer: You can buy approximately 0.4873 Bitcoin coins with an investment of $45,000 USD at the current price of $92,366.50 USD per coin.
@@ -159,24 +159,70 @@ Final Answer: You can buy approximately 0.4873 Bitcoin coins with an investment 
         self.llm = None
     
 
-    # FIX 1: Un-indented this method (aligned with __init__)
     def parse_action(self, llm_output: str):
         """
         Scans the LLM's text for 'Action: tool_name[input]'.
         Returns (tool_name, tool_input) or (None, None).
         """
-        # FIX 2: Fixed Regex (\w instead of /w) and added "Action:" anchor
         pattern = re.compile(r"Action:\s*\{?\s*(\w+)\[(.*)\]", re.DOTALL)
         
-        # FIX 3: Used .search() instead of .match()
         match = pattern.search(llm_output)
 
         if match:
             return match.group(1), match.group(2)
         else:
             return None, None
+
+    def memorize_episode(self):
+        """
+        Dual-Layer Memory Processing:
+        1. Summarizes the last session for the Episodic Stream (Always).
+        2. Extracts permanent facts for the Long-Term Vault (Conditional).
+        """
+        print(f"   [Memory] 🧠 Consolidating memories...")
+        
+        # The prompt asks for a JSON object with two keys: 'summary' and 'facts'
+        memory_prompt = (
+            "Analyze the interaction above. Perform two tasks:\n"
+            "1. SUMMARY: Write a concise, 1-2 sentence summary of the interaction from your perspective capturing the necessary details.\n"
+            "2. FACTS: Extract any new PERMANENT facts (names, preferences, project constraints) that must be saved forever.\n"
+            "Output ONLY a JSON object with this format:\n"
+            "{ \"summary\": \"User asked X, we did Y.\", \"facts\": [\"User likes Z\", \"Project deadline is W\"] }\n"
+            "If no new facts, leave 'facts' as empty list []."
+        )
+        
+        try:
+            # 1. Ask Brain
+            self.llm.append(system(memory_prompt))
+            response = self.llm.sample()
+            content = response.content
+            print(f"   [Memory] 🧠 Raw consolidation output: {content}")
             
-    # FIX 1: Un-indented this method too
+            # 2. Sanitize JSON
+            if "```" in content:
+                content = content.split("```")[1]
+                if content.startswith("json"):
+                    content = content[4:]
+                content = content.strip()
+            
+            # 3. Parse
+            import json
+            data = json.loads(content)
+            
+            # 4. Save to The Stream (Episodic)
+            summary = data.get("summary", "Interaction completed.")
+            self.db.add_episodic_log(summary)
+            
+            # 5. Save to The Vault (Long Term) - Only if facts exist
+            facts = data.get("facts", [])
+            if facts and isinstance(facts, list) and len(facts) > 0:
+                print(f"   [Memory] 💎 Found {len(facts)} permanent facts.")
+                for fact in facts:
+                    self.db.add_long_term_fact(fact)
+            
+        except Exception as e:
+            print(f"   [Memory] ⚠️ Consolidation failed: {e}")   
+            
     def run(self)-> str:
         """
         Main Loop: Now Powered by Ears 👂
@@ -185,13 +231,8 @@ Final Answer: You can buy approximately 0.4873 Bitcoin coins with an investment 
             print("\n💬 CLARA is listening... (Press Ctrl+C to switch to keyboard)")
             while True:
                 try:
-                    # 1. LISTEN (Uses your ears.py logic)
-                    # This will block for ~5-8 seconds waiting for speech
                     user_input = listen_local()
-
-                    # 2. CHECK: Did we hear anything?
                     if not user_input:
-                        # If listen_local returns None (silence/error), we just loop back
                         continue
 
                     # 3. WAKE WORD CHECK (Optional but recommended)
@@ -202,19 +243,13 @@ Final Answer: You can buy approximately 0.4873 Bitcoin coins with an investment 
                     #    continue
 
                     print(f"\n🗣️ User said: {user_input}")
-
-                    # 4. EXIT COMMANDS
                     if user_input.lower() in ["exit", "quit", "shutdown"]:
                         print("👋 Shutting down.")
                         exit(0)
-
-                    # 5. EXECUTE THE AGENT LOGIC
-                    # (This is your existing ROCTTOC / Logic flow)
                     query = user_input
                     break
 
                 except KeyboardInterrupt:
-                    # Allows you to break the voice loop and type if needed
                     print("\n⌨️ Manual Input Mode Triggered.")
                     try:
                         manual_input = input("You (Type): ")
@@ -230,8 +265,10 @@ Final Answer: You can buy approximately 0.4873 Bitcoin coins with an investment 
             # self.chat_history = self.system_prompt + f"\nUser: {query}\n"
             self.llm.append(system(self.system_prompt))
             gatekeeper_prompt = (
-                        f"User Query: '{user_input}'\n"
-                        "Analyze this request. Output ONLY an XML block:\n"
+                        f"User Query: '{query}'\n"
+                        "Analyze this request properly, if it is a TASK or CHAT:\n"
+                        "Hint: A multi step chat is also a TASK, a single question is CHAT.\n"
+                        "Output an XML block like the format given below:\n"
                         "<analysis>\n"
                         "  <intent>TASK or CHAT</intent>\n"
                         "  <context_needed>TRUE or FALSE</context_needed>\n"
@@ -241,6 +278,8 @@ Final Answer: You can buy approximately 0.4873 Bitcoin coins with an investment 
                     
             print(">> [Brain] Analyzing Intent...")
             gate_response = self.llm.sample().content
+            self.llm.append(assistant(gate_response))
+            self.llm.append(system("End of analysis."))
                     
             intent = "TASK" if "<intent>TASK</intent>" in gate_response else "CHAT"
             need_context = "<context_needed>TRUE</context_needed>" in gate_response
@@ -252,10 +291,10 @@ Final Answer: You can buy approximately 0.4873 Bitcoin coins with an investment 
                 print(">> [Memory] Loading Soul from disk...")
                 # <--- NEW: Use CRUD to fetch formatted context
                 mem_context = self.db.get_full_context()
-                self.llm.append(system(f"PREVIOUS LONG-TERM MEMORY:\n{mem_context}"))
+                self.llm.append(system(f"PREVIOUS MEMORY:\n{mem_context}"))
             
             # 5. EXECUTE
-            self.llm.append(user(f"Now, execute this request: {user_input}"))
+            self.llm.append(user(f"Now, execute this request: {query}"))
 
             if intent == "TASK":
                 final_answer = self.run_task()
@@ -267,6 +306,7 @@ Final Answer: You can buy approximately 0.4873 Bitcoin coins with an investment 
 
             # 7. THE MEMORIZER
             self.memorize_episode()
+            self.llm = self.client.chat.create(model="grok-4-1-fast-reasoning")
 
     def run_chat(self):
         print(">> [Mode] Chatting...")

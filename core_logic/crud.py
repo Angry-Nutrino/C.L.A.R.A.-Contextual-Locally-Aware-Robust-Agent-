@@ -8,33 +8,26 @@ class crud:
         self.memory = self._load_memory()
 
     def _load_memory(self):
-        """
-        Loads the JSON file. If it doesn't exist, creates a blank one.
-        """
         if not os.path.exists(self.filepath):
-            print("⚠️ Memory file not found. Creating new brain...")
             return self._create_default_memory()
-        
         try:
             with open(self.filepath, 'r') as f:
-                return json.load(f) # Converts JSON text -> Python Dict
+                return json.load(f)
         except json.JSONDecodeError:
-            print("❌ Memory Corrupted! Starting fresh.")
             return self._create_default_memory()
 
     def _create_default_memory(self):
-        # The structure we designed earlier
         return {
             "user_profile": {},
             "project_state": {},
-            "episodic_log": []
+            "long_term": [],     # <--- NEW: The "Vault"
+            "episodic_log": []   # <--- The "Stream"
         }
 
     def _save_memory(self):
-        """Saves the current Python Dict back to the JSON file."""
         try:
             with open(self.filepath, 'w') as f:
-                json.dump(self.memory, f, indent=2) # Converts Python Dict -> JSON text
+                json.dump(self.memory, f, indent=2)
         except Exception as e:
             print(f"❌ Failed to save memory: {e}")
 
@@ -42,44 +35,57 @@ class crud:
 
     def get_full_context(self):
         """
-        Formats memory into a string for the AI System Prompt.
+        Fetches the Soul (Profile), The Vault (Long Term), and The Stream (Last 10 interactions).
         """
         profile = self.memory.get("user_profile", {})
         project = self.memory.get("project_state", {})
+        long_term = self.memory.get("long_term", [])
+        episodes = self.memory.get("episodic_log", [])
+
+        # Get last 10 interactions (The Stream)
+        recent_history = episodes[-10:] if len(episodes) > 0 else []
+
+        context = "--- LONG-TERM MEMORY CONTEXT ---\n"
         
-        # We build a clean string for the LLM to read
-        context = "--- MEMORY CONTEXT ---\n"
+        # 1. Identity
         context += f"USER: {profile.get('name', 'Unknown')} | ROLE: {profile.get('role', 'User')}\n"
-        context += f"PROJECT PHASE: {project.get('current_phase', 'Unknown')}\n"
-        context += "----------------------"
+        context += f"TECH STACK: {', '.join(profile.get('preferences', {}).get('tools', []))}\n"
+        
+        # 2. Project State
+        context += f"CURRENT PHASE: {project.get('current_phase', 'Unknown')}\n"
+        
+        # 3. The Vault (Permanent Facts)
+        if long_term:
+            context += "\n[PERMANENT KNOWLEDGE VAULT]:\n"
+            for fact in long_term:
+                context += f"- {fact}\n"
+
+        # 4. The Stream (Recent History)
+        if recent_history:
+            context += "\n[RECENT CONVERSATION STREAM (Last 10)]:\n"
+            for ep in recent_history:
+                context += f"- [{ep.get('timestamp', '')[:16]}] {ep.get('summary', '')}\n"
+
+        context += "--------------------------------"
         return context
 
-    def add_episodic_log(self, summary, tags=[]):
+    def add_episodic_log(self, summary):
         """
-        Adds a history log and saves it.
+        Always saves the summary of the last interaction.
         """
         entry = {
             "timestamp": datetime.now().isoformat(),
-            "summary": summary,
-            "tags": tags
+            "summary": summary
         }
         self.memory["episodic_log"].append(entry)
-        self._save_memory() # Auto-save after adding
-        print(f" 💾 Memory Saved: {summary}")
-    
-    def update_profile(self, category, key, value):
-        """
-        Allows the AI to update specific fields in the profile or project state.
-        Usage: db.update_profile("project_state", "current_phase", "Building Soul")
-        """
-        if category in self.memory:
-            self.memory[category][key] = value
-            self._save_memory()
-            print(f" 📝 Updated {category} -> {key}: {value}")
-        else:
-            print(f" ❌ Category '{category}' does not exist.")
+        self._save_memory()
+        print(f"   [Memory] 📝 Logged to Stream: {summary[:50]}...")
 
-# Self-test
-if __name__ == "__main__":
-    db = crud()
-    print(db.get_full_context())
+    def add_long_term_fact(self, fact):
+        """
+        Saves a permanent fact to the Vault.
+        """
+        if fact not in self.memory["long_term"]:
+            self.memory["long_term"].append(fact)
+            self._save_memory()
+            print(f"   [Memory] 🔒 Locked to Vault: {fact}")
