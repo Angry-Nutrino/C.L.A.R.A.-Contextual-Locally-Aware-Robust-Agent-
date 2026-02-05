@@ -1,39 +1,51 @@
-# --- IGNORE MASSIVE MOONDREAM FOLDER ---
-core_logic/moondream_brain/
-**/moondream_brain/
+# --- SECRETS (NEVER TOUCH) ---
+.env
+.env.local
+interface/.env
+api_keys.txt
 
-# --- SAFETY NET (Ignore all heavy model weights anywhere) ---
-*.pt
-*.pth
-*.bin
-*.onnx
-*.safetensors
-
-
-# --- IGNORE PYTHON ENVIRONMENTS (CRITICAL) ---
+# --- PYTHON ---
+__pycache__/
+*.py[cod]
+*$py.class
 venv/
 .venv/
 env/
 Lib/
 Scripts/
 
-# --- IGNORE MODELS (Too heavy) ---
+# --- NODE / REACT (CRITICAL ADDITION) ---
+interface/node_modules/
+interface/dist/
+interface/build/
+.eslintcache
+
+# --- AI MODELS & WEIGHTS ---
+core_logic/moondream_brain/
+**/moondream_brain/
 core_logic/models/
-*.onnx
-*.bin
 *.pt
 *.pth
+*.bin
+*.onnx
+*.safetensors
 
-# --- IGNORE AUDIO/TEMP ---
-*.wav
-*.mp3
-__pycache__/
-*.pyc
-
-# --- IGNORE JUNK & SECRETS ---
-.env
-api_keys.txt
-jarvis_v2/
-*.png
-
+# --- MEMORY & DB ---
 core_logic/memory.json
+faiss_index.bin
+faiss_index.pkl
+*.db
+*.sqlite3
+
+# --- TEMP FILES (Specific, not global) ---
+# Only ignore the temp inputs, not your UI assets
+temp_*.png
+temp_*.jpg
+temp_*.wav
+output.wav
+*.log
+
+# --- OLD/JUNK ---
+jarvis_v2/
+.DS_Store
+Thumbs.db

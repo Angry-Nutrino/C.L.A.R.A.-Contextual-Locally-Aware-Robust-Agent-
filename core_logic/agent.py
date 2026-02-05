@@ -229,45 +229,10 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
                     self.db.add_long_term_fact(fact)
             
         except Exception as e:
-            print(f"   [Memory] ⚠️ Consolidation failed: {e}")   
-            
-    def run(self)-> str:
-        """
-        Main Loop: Now Powered by Ears 👂
-        """
-        while True:
-            print("\n💬 CLARA is listening... (Press Ctrl+C to switch to keyboard)")
-            while True:
-                try:
-                    user_input = listen_local()
-                    if not user_input:
-                        continue
+            print(f"   [Memory] ⚠️ Consolidation failed: {e}")
 
-                    # 3. WAKE WORD CHECK (Optional but recommended)
-                    # Since your ears.py grabs everything, we can filter here.
-                    # If you want her to respond to everything, remove this block.
-                    # if "clara" not in user_input.lower():
-                    #    print(" [Ignored: No Wake Word]")
-                    #    continue
-
-                    print(f"\n🗣️ User said: {user_input}")
-                    if user_input.lower() in ["exit", "quit", "shutdown"]:
-                        print("👋 Shutting down.")
-                        exit(0)
-                    query = user_input
-                    break
-
-                except KeyboardInterrupt:
-                    print("\n⌨️ Manual Input Mode Triggered.")
-                    try:
-                        manual_input = input("You (Type): ")
-                        if manual_input.strip():
-                            query = manual_input
-                            break
-                    except KeyboardInterrupt:
-                        print("Bye!")
-                        break
-            # query = input("Enter your mission for CLARA: ")
+    def process_request(self, query):
+        # query = input("Enter your mission for CLARA: ")
             print(f"\n New Mission : {query}")
             # Added basic formatting to history
             # self.chat_history = self.system_prompt + f"\nUser: {query}\n"
@@ -311,16 +276,99 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
                 final_answer = self.run_chat()
 
             # 6. SPEAK RESULT
-            speak(final_answer)
-
             # 7. THE MEMORIZER
             self.memorize_episode()
             self.llm = self.client.chat.create(model="grok-4-1-fast-reasoning")
 
+            return final_answer
+            
+    def run(self, direct_input=None, image_data=None)-> str:
+        """
+        Main Loop: Now Powered by Ears 👂
+        """
+        if direct_input:
+            final_prompt = direct_input
+            if image_data:
+                print("🖼️ Image received from Interface. Processing...")
+                try:
+                    import base64
+                    import os
+                    
+                    if "," in image_data:
+                        image_data = image_data.split(",")[1]
+                        
+                    image_path = "temp_interface_image.png"
+                    
+                    with open(image_path, "wb") as f:
+                        f.write(base64.b64decode(image_data))
+                        
+                    abs_path = os.path.abspath(image_path)
+                    final_prompt = f"{direct_input} \n\n[SYSTEM: An image has been uploaded and saved at '{abs_path}'. If the user asks about it, use the 'vision' tool to analyze this file.]"
+                    
+                    print(f"   Saved to: {image_path}")
+                except Exception as e:
+                    print(f"   ❌ Failed to save image: {e}")
+            response = self.process_request(final_prompt)
+            
+            # Optional: Speak locally too if you want the PC to talk
+            speak(response)
+            
+            return response
+
+        # --- MODE B: CLI (Terminal) ---
+        else:
+            print("🎤 Voice Mode Active. (Say 'Clara' to trigger, or Ctrl+C to type)")
+            
+            while True:
+                try:
+                    # 1. Listen (Blocking)
+                    user_input = listen_local()
+                    
+                    if user_input:
+                        # 2. Wake Word Check
+                        # We use 'clara' in lower() to match 'Clara', 'CLARA', etc.
+                        if "clara" not in user_input.lower():
+                            print(f"   [Ignored] Heard: '{user_input}' (No wake word)")
+                            continue
+                        
+                        print(f"✅ Wake Word Detected: '{user_input}'")
+                        
+                        # 3. Process
+                        response = self.process_request(user_input)
+                        
+                        # 4. Speak
+                        speak(response)
+                        
+                except KeyboardInterrupt:
+                    # --- THE INTERRUPT TRAP ---
+                    # This catches the Ctrl+C and opens the text box instead of dying.
+                    print("\n\n⌨️ MANUAL OVERRIDE ENGAGED")
+                    try:
+                        manual_input = input("   Enter command for CLARA: ")
+                        
+                        # Handle empty enter key
+                        if not manual_input.strip():
+                            print("   (Cancelled)")
+                            continue
+                            
+                        # Process Manual Input
+                        response = self.process_request(manual_input)
+                        speak(response)
+                        print("🎤 Returning to Voice Mode...\n")
+                        
+                    except KeyboardInterrupt:
+                        # If you hit Ctrl+C AGAIN while typing, we actually quit.
+                        print("\n👋 System Shutdown.")
+                        break
+                
+                
+                    
+            
+            
     def run_chat(self):
         print(">> [Mode] Chatting...")
         response = self.llm.sample()
-        return response.content
+        return response.content.split("Final Answer:")[-1].strip()
 
     def run_task(self):
         turn_count = 0
