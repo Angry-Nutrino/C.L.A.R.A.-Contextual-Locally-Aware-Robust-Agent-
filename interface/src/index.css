@@ -1,53 +1,82 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+@import "tailwindcss";
 
 :root {
-  background-color: #050505;
-  color: #00ff41; /* Cyberpunk Green */
-  font-family: 'Courier New', Courier, monospace;
+  --bg-depth: #0a0a0a;   /* The Void */
+  --bg-surface: #121212; /* The Cards */
+  --border-subtle: #2a2a2a;
+  --accent-glow: 0 0 20px rgba(255, 255, 255, 0.05);
 }
 
-/* Custom Scrollbar */
+body {
+  background-color: var(--bg-depth);
+  color: #ededed;
+  font-family: 'Inter', sans-serif; /* If you have it, otherwise system-ui */
+}
+
+/* The "Pulse" Animation for later */
+@keyframes thinking-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.1); }
+  70% { box-shadow: 0 0 20px 10px rgba(255, 255, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
+}
+
+.animate-pulse-glow {
+  animation: thinking-pulse 2s infinite;
+}
+
+/* Scrollbar Hiding (Clean Look) */
 ::-webkit-scrollbar {
   width: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #0d0d0d; 
+  background: var(--bg-depth);
 }
 ::-webkit-scrollbar-thumb {
-  background: #1a4d1a; 
+  background: #333;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #00ff41; 
+  background: #555;
+}
+/* ... existing code ... */
+
+/* 1. THE BREATHING ANIMATION (For the whole UI border) */
+@keyframes breathe-glow {
+  0% { box-shadow: 0 0 5px rgba(16, 185, 129, 0); border-color: #333; }
+  50% { box-shadow: 0 0 20px rgba(16, 185, 129, 0.2); border-color: rgba(16, 185, 129, 0.5); }
+  100% { box-shadow: 0 0 5px rgba(16, 185, 129, 0); border-color: #333; }
 }
 
-/* Animations */
-@keyframes scanline {
-  0% { transform: translateY(-100%); }
-  100% { transform: translateY(100%); }
+.animate-breathe {
+  animation: breathe-glow 3s infinite ease-in-out;
+  border: 1px solid transparent; /* Placeholder for the border transition */
 }
 
-.scanline::before {
-  content: " ";
-  display: block;
-  position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  right: 0;
-  background: linear-gradient(to bottom, rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
-  background-size: 100% 2px, 3px 100%;
-  pointer-events: none;
-  z-index: 10;
+/* 2. THE SIDEBAR REVEAL (Tech Slide-In) */
+@keyframes reveal-slide {
+  0% { opacity: 0; transform: translateY(10px); filter: blur(2px); }
+  100% { opacity: 1; transform: translateY(0); filter: blur(0); }
 }
 
-.typing-cursor::after {
-  content: '▋';
-  animation: blink 1s step-start infinite;
+.reveal-entry {
+  animation: reveal-slide 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* 3. THE CURSOR (For the typing effect) */
+.cursor-blink {
+  display: inline-block;
+  width: 6px;
+  height: 16px;
+  background-color: #10b981;
+  animation: blink 1s infinite;
+  vertical-align: middle;
+  margin-left: 2px;
 }
 
 @keyframes blink {
+  0%, 100% { opacity: 1; }
   50% { opacity: 0; }
 }

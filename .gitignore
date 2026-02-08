@@ -15,7 +15,8 @@ Lib/
 Scripts/
 
 # --- NODE / REACT (CRITICAL ADDITION) ---
-interface/node_modules/
+node_modules/
+**/node_modules/
 interface/dist/
 interface/build/
 .eslintcache

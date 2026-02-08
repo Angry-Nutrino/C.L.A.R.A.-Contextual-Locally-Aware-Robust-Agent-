@@ -231,14 +231,35 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
         except Exception as e:
             print(f"   [Memory] ⚠️ Consolidation failed: {e}")
 
-    def process_request(self, query):
+    async def process_request(self, query, image_data=None, on_step_update=None):
         # query = input("Enter your mission for CLARA: ")
             print(f"\n New Mission : {query}")
+            final_prompt = query
+            if image_data:
+                print("🖼️ Image received from Interface. Processing...")
+                try:
+                    import base64
+                    import os
+                    
+                    if "," in image_data:
+                        image_data = image_data.split(",")[1]
+                        
+                    image_path = "temp_interface_image.png"
+                    
+                    with open(image_path, "wb") as f:
+                        f.write(base64.b64decode(image_data))
+                        
+                    abs_path = os.path.abspath(image_path)
+                    final_prompt = f"{query} \n\n[SYSTEM: An image has been uploaded and saved at '{abs_path}'. If the user asks about it, use the 'vision' tool to analyze this file.]"
+                    
+                    print(f"   Saved to: {image_path}")
+                except Exception as e:
+                    print(f"   ❌ Failed to save image: {e}")
             # Added basic formatting to history
             # self.chat_history = self.system_prompt + f"\nUser: {query}\n"
             self.llm.append(system(self.system_prompt))
             gatekeeper_prompt = (
-                        f"User Query: '{query}'\n"
+                        f"User Query: '{final_prompt}'\n"
                         "Analyze this request properly, if it is a TASK or CHAT:\n"
                         "Hint 1: A multi step chat is also a TASK, a single question is CHAT.\n"
                         "Hint 2: if a tool is needed to answer the question, it is a TASK.\n"
@@ -268,12 +289,12 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
                 self.llm.append(system(f"PREVIOUS MEMORY:\n{mem_context}"))
             
             # 5. EXECUTE
-            self.llm.append(user(f"Now, execute this request: {query}"))
+            self.llm.append(user(f"Now, execute this request: {final_prompt}"))
 
             if intent == "TASK":
-                final_answer = self.run_task()
+                final_answer = await self.run_task(on_step_update=on_step_update)
             else:
-                final_answer = self.run_chat()
+                final_answer = await self.run_chat(on_step_update=on_step_update)
 
             # 6. SPEAK RESULT
             # 7. THE MEMORIZER
@@ -282,10 +303,12 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
 
             return final_answer
             
-    def run(self, direct_input=None, image_data=None)-> str:
+    def run(self, direct_input=None, image_data=None) -> str:
         """
-        Main Loop: Now Powered by Ears 👂
+        Main Loop: Now Powered by Ears 👂 (Async Wrapper Version)
         """
+        import asyncio  # Import locally to avoid global clutter
+        # --- MODE A: DIRECT INPUT (Used by API/CLI arguments) ---
         if direct_input:
             final_prompt = direct_input
             if image_data:
@@ -308,56 +331,62 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
                     print(f"   Saved to: {image_path}")
                 except Exception as e:
                     print(f"   ❌ Failed to save image: {e}")
-            response = self.process_request(final_prompt)
             
-            # Optional: Speak locally too if you want the PC to talk
+            # ⚠️ FIX: Wrap the async call in asyncio.run()
+            try:
+                # If there's already an event loop running (unlikely in simple CLI, but possible), use it
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                     # This happens if you call run() from inside another async function (bad practice, but safety net)
+                     response = loop.run_until_complete(self.process_request(final_prompt))
+                else:
+                     response = asyncio.run(self.process_request(final_prompt))
+            except RuntimeError:
+                # Fallback for complex environments (like Jupyter or some servers)
+                response = asyncio.run(self.process_request(final_prompt))
+
+            # Optional: Speak locally
             speak(response)
             
             return response
 
-        # --- MODE B: CLI (Terminal) ---
+        # --- MODE B: CLI / VOICE LOOP (Terminal) ---
         else:
             print("🎤 Voice Mode Active. (Say 'Clara' to trigger, or Ctrl+C to type)")
             
             while True:
                 try:
-                    # 1. Listen (Blocking)
+                    # 1. Listen (Blocking - this is fine to stay sync)
                     user_input = listen_local()
                     
                     if user_input:
                         # 2. Wake Word Check
-                        # We use 'clara' in lower() to match 'Clara', 'CLARA', etc.
                         if "clara" not in user_input.lower():
                             print(f"   [Ignored] Heard: '{user_input}' (No wake word)")
                             continue
                         
                         print(f"✅ Wake Word Detected: '{user_input}'")
                         
-                        # 3. Process
-                        response = self.process_request(user_input)
+                        # 3. Process (⚠️ FIX: Wrap in asyncio.run)
+                        response = asyncio.run(self.process_request(user_input))
                         
                         # 4. Speak
                         speak(response)
                         
                 except KeyboardInterrupt:
-                    # --- THE INTERRUPT TRAP ---
-                    # This catches the Ctrl+C and opens the text box instead of dying.
                     print("\n\n⌨️ MANUAL OVERRIDE ENGAGED")
                     try:
                         manual_input = input("   Enter command for CLARA: ")
-                        
-                        # Handle empty enter key
                         if not manual_input.strip():
                             print("   (Cancelled)")
                             continue
                             
-                        # Process Manual Input
-                        response = self.process_request(manual_input)
+                        # Manual Input Processing (⚠️ FIX: Wrap in asyncio.run)
+                        response = asyncio.run(self.process_request(manual_input))
                         speak(response)
                         print("🎤 Returning to Voice Mode...\n")
                         
                     except KeyboardInterrupt:
-                        # If you hit Ctrl+C AGAIN while typing, we actually quit.
                         print("\n👋 System Shutdown.")
                         break
                 
@@ -365,14 +394,16 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
                     
             
             
-    def run_chat(self):
+    async def run_chat(self, on_step_update=None):
         print(">> [Mode] Chatting...")
+        if on_step_update:
+            await on_step_update("Thinking...", type="status")
         response = self.llm.sample()
         return response.content.split("Final Answer:")[-1].strip()
 
-    def run_task(self):
+    async def run_task(self, on_step_update=None):
         turn_count = 0
-        max_turns = 5
+        max_turns = 8
         
         while turn_count < max_turns:
             turn_count += 1
@@ -380,7 +411,25 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
             
             response_obj = self.llm.sample()
             raw_content = response_obj.content
+
+            # --- 2. EXTRACT & SEND THOUGHT ---
+            # We want to send JUST the thought to the UI right now.
+            if on_step_update:
+                # Regex to find "Thought: ... Action:" or just "Thought: ..."
+                import re
+                thought_match = re.search(r"Thought:\s*(.*?)(?=\nAction:|$)", raw_content, re.DOTALL)
+                
+                if thought_match:
+                    thought_text = thought_match.group(1).strip()
+                    # Send it! "type='thought'" tells UI to show this in the brain panel
+                    await on_step_update(thought_text, type="thought")
+                else:
+                    # Fallback: If no clear thought tag, send the whole start
+                    await on_step_update(raw_content[:100] + "...", type="thought")
             
+            import asyncio
+            await asyncio.sleep(0.05)  # Small delay to simulate thinking time and allow UI to update
+
             if "Observation:" in raw_content:
                 print("   [System] ✂️ Cutting off hallucinated Observation.")
                 response_text = raw_content.split("Observation:")[0].strip()

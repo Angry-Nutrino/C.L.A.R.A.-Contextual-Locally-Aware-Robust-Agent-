@@ -1,69 +1,89 @@
-// interface/src/hooks/useClara.js
 import { useState, useEffect, useRef } from 'react';
 
-export function useClara() {
-  const [isConnected, setIsConnected] = useState(false);
-  const [logs, setLogs] = useState([]); // Stores "Thinking..." messages
-  const [response, setResponse] = useState(""); // Stores the final answer
-  
-  // This ref holds the actual socket connection
+export default function useClara() {
+  const [messages, setMessages] = useState([]);      // The Main Chat (Center)
+  const [thoughts, setThoughts] = useState([]);      // The Neural Stream (Right)
+  const [input, setInput] = useState("");            // The User's Text box
+  const [status, setStatus] = useState("disconnected"); // 'connected', 'thinking', 'idle'
+  const [selectedImage, setSelectedImage] = useState(null);
   const socketRef = useRef(null);
 
   useEffect(() => {
-    // 1. Dial the Phone (Connect to Python)
-    // Note: We use port 8001 because that's where you moved api.py
-    const ws = new WebSocket('ws://localhost:8001/ws');
-    socketRef.current = ws;
+    // 1. Connect to Python on Port 8001
+    socketRef.current = new WebSocket("ws://localhost:8001/ws");
 
-    // 2. When Connected
-    ws.onopen = () => {
-      console.log("✅ React: Connected to Brain");
-      setIsConnected(true);
-      addLog("System: Neural Link Established.");
+    socketRef.current.onopen = () => {
+      console.log("✅ WebSocket Connected");
+      setStatus("connected");
+      addThought("System", "Neural Link Established.");
     };
 
-    // 3. When a Message Arrives (From Python)
-    ws.onmessage = (event) => {
+    socketRef.current.onmessage = (event) => {
       const data = JSON.parse(event.data);
       
-      if (data.type === 'log') {
-        // It's a "Thinking" message
-        addLog(data.content);
+      // 2. ROUTING LOGIC
+      // If it's a "Thought" -> Go to Right Panel
+      if (data.type === "thought" || data.type === "status") {
+        addThought("Clara", data.content);
+        setStatus("thinking"); // Make the UI pulse
       } 
-      else if (data.type === 'response') {
-        // It's the Final Answer
-        setResponse(data.content);
-        addLog(`>> Clara: ${data.content}`);
+      
+      // If it's a "Final Answer" -> Go to Center Chat
+      if (data.type === "final_answer") {
+        addMessage("Clara", data.content);
+        setStatus("idle");     // Stop pulsing
       }
     };
 
-    // 4. When Disconnected
-    ws.onclose = () => {
-      console.log("❌ React: Disconnected");
-      setIsConnected(false);
-      addLog("System: Neural Link Lost.");
-    };
-
-    // Cleanup: Hang up the phone when we leave the page
-    return () => {
-      ws.close();
-    };
+    return () => socketRef.current?.close();
   }, []);
 
-  // Helper to add logs to our list
-  const addLog = (message) => {
-    setLogs((prev) => [...prev, message]);
+  // Helper to add to Chat (Center)
+  const addMessage = (sender, text) => {
+    setMessages(prev => [...prev, { sender, text, time: new Date().toLocaleTimeString() }]);
   };
 
-  // Function to Speak (Send data to Python)
-  const sendMessage = (text) => {
-    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-      addLog(`>> User: ${text}`);
-      socketRef.current.send(text);
-    } else {
-      console.error("Cannot send: Disconnected");
+  // Helper to add to Brain (Right)
+  const addThought = (source, text) => {
+    setThoughts(prev => [...prev, { source, text, time: new Date().toLocaleTimeString() }]);
+  };
+
+  // The "Send" Action
+  const sendMessage = () => {
+    if (!input.trim()) return;
+    
+    // 1. Show user message immediately
+    addMessage("User", input);
+    const displayText = selectedImage ? `[Image Uploaded] ${input}` : input;
+    addMessage("User", displayText);
+    const payload = JSON.stringify({
+      text: input,
+      image: selectedImage // Base64 string
+    });
+    
+    // 2. Send to Python
+    socketRef.current.send(payload);
+    
+    // 3. Clear box
+    setInput("");
+    setSelectedImage(null);
+    setStatus("thinking");
+  };
+  // 4. NEW HELPER: Handle File Selection
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setSelectedImage(reader.result); // Save as Data URL
+      };
+      reader.readAsDataURL(file);
     }
   };
 
-  return { isConnected, logs, response, sendMessage };
+
+  return { 
+    messages, thoughts, input, setInput, sendMessage, status,
+    selectedImage, setSelectedImage, handleImageUpload 
+  };
 }
