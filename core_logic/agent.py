@@ -1,4 +1,5 @@
 import re
+import json
 from langchain_community.llms import Ollama
 from .tools import run_python_code, web_search, get_time_date, consult_archive
 from .memory_manager import free_gpu_memory
@@ -180,6 +181,26 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
             return match.group(1), match.group(2)
         else:
             return None, None
+    
+    def parse_json_safely(self, text):
+        try:
+            # 1. Try direct parse first (Fastest)
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        # 2. If that fails, look for the FIRST '{' and the LAST '}'
+        # This strips away the "## ACKNOWLEDGEMENT" fluff at the end
+        try:
+            match = re.search(r"\{.*\}", text, re.DOTALL)
+            if match:
+                clean_json = match.group(0)
+                return json.loads(clean_json)
+        except Exception:
+            pass
+        
+        print(f"❌ JSON Parse Failed completely on: {text[:50]}...")
+        return None
 
     def memorize_episode(self):
         """
@@ -194,7 +215,7 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
             "Analyze the interaction above. Perform two tasks:\n"
             "1. SUMMARY: Write a concise, 1-2 sentence summary of the interaction from your perspective capturing the necessary details.\n"
             "2. FACTS: Extract any new PERMANENT facts (names, preferences, project constraints) that must be saved forever.\n"
-            "Output ONLY a JSON object with this format:\n"
+            "Output ```ONLY``` a JSON object in this format strictly, No extra text:\n"
             "{ \"summary\": \"User asked X, we did Y.\", \"facts\": [\"User likes Z\", \"Project deadline is W\"] }\n"
             "If no new facts, leave 'facts' as empty list []."
         )
@@ -206,16 +227,16 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
             content = response.content
             print(f"   [Memory] 🧠 Raw consolidation output: {content}")
             
-            # 2. Sanitize JSON
-            if "```" in content:
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
-                content = content.strip()
+            # # 2. Sanitize JSON
+            # if "```" in content:
+            #     content = content.split("```")[1]
+            #     if content.startswith("json"):
+            #         content = content[4:]
+            #     content = content.strip()
+            # Using a different approach to extract JSON that is more robust to formatting issues:
             
             # 3. Parse
-            import json
-            data = json.loads(content)
+            data = self.parse_json_safely(content)
             
             # 4. Save to The Stream (Episodic)
             summary = data.get("summary", "Interaction completed.")

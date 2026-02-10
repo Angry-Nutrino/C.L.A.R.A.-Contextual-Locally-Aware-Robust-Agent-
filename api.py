@@ -5,6 +5,8 @@ import json
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+import psutil
+import platform
 
 # --- PATH SETUP ---
 # This tells Python: "Look for agent.py inside the core_logic folder"
@@ -66,6 +68,70 @@ async def websocket_endpoint(websocket: WebSocket):
             
     except WebSocketDisconnect:
         print("Client disconnected")
+
+@app.get("/soul")
+async def get_soul():
+    """
+    Returns the Agent's perception of the User + Real Hardware Vitals.
+    """
+    # 1. Default / Fallback Profile
+    profile = {
+        "identity": {"name": "Alkama", "role": "Unknown", "location": "India", "clearance": "Lvl 1"},
+        "skills": ["System Offline"],
+        "mission": {"current": "Initializing...", "status": "WAIT", "phase": "Init"},
+        "vitals": {"cpu": "Unknown", "gpu": "Offline", "memory_usage": "0%", "status": "OFFLINE"}
+    }
+
+    # 2. Load Real Memory (User Identity)
+    try:
+        if os.path.exists("core_logic/memory.json"):
+            with open("core_logic/memory.json", "r") as f:
+                memory = json.load(f)
+            
+            user = memory.get("user_profile", {})
+            state = memory.get("project_state", {})
+            
+            profile["identity"] = {
+                "name": user.get("name", "Alkama"),
+                "role": user.get("role", "Architect"),
+                "location": "India", 
+                "clearance": "Lvl 5 (Admin)"
+            }
+            
+            # Combine 'Interests' and 'Tools'
+            tools = user.get("preferences", {}).get("tools", [])
+            interests = user.get("interests", [])
+            profile["skills"] = (tools + interests)[:8] 
+            
+            profile["mission"] = {
+                "current": state.get("current_phase", "Unknown"),
+                "status": "IN PROGRESS",
+                "phase": "V2.0"
+            }
+    except Exception as e:
+        print(f"⚠️ Memory Load Error: {e}")
+
+    # 3. Load Real Hardware Vitals (Separate Try-Block to prevent crashes)
+    try:
+        # Get RAM usage as percentage
+        ram_percent = psutil.virtual_memory().percent
+        
+        # Get CPU Name (Windows friendly)
+        cpu_name = platform.processor()
+        # Clean up the long CPU name if needed
+        if "Intel" in cpu_name: cpu_name = "Intel Core i5" # Simplified for UI
+        if "AMD" in cpu_name: cpu_name = "AMD Ryzen 4800H" # Simplified for UI
+
+        profile["vitals"] = {
+            "cpu": cpu_name,
+            "gpu": "RTX 3050", # Still hardcoded (Python needs torch to see GPU)
+            "memory_usage": f"{ram_percent}%", # <--- REAL LIVE DATA
+            "status": "ONLINE"
+        }
+    except Exception as e:
+        print(f"⚠️ Vitals Error: {e}")
+
+    return profile
 
 if __name__ == "__main__":
     # We use port 8001 since 8000 was blocked earlier

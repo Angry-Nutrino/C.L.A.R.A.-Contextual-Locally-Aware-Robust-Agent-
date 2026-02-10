@@ -39,8 +39,10 @@ export default function useClara() {
   }, []);
 
   // Helper to add to Chat (Center)
-  const addMessage = (sender, text) => {
-    setMessages(prev => [...prev, { sender, text, time: new Date().toLocaleTimeString() }]);
+  const addMessage = (sender, text, image = null) => {
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    // Store the image in the message object
+    setMessages(prev => [...prev, { sender, text, image, time: timestamp }]);
   };
 
   // Helper to add to Brain (Right)
@@ -50,21 +52,20 @@ export default function useClara() {
 
   // The "Send" Action
   const sendMessage = () => {
-    if (!input.trim()) return;
+    if (!input.trim() && !selectedImage) return;
     
-    // 1. Show user message immediately
-    addMessage("User", input);
-    const displayText = selectedImage ? `[Image Uploaded] ${input}` : input;
-    addMessage("User", displayText);
+    // Show user message (WITH IMAGE DATA now)
+    addMessage("User", input, selectedImage);
+    
     const payload = JSON.stringify({
       text: input,
-      image: selectedImage // Base64 string
+      image: selectedImage
     });
     
-    // 2. Send to Python
-    socketRef.current.send(payload);
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      socketRef.current.send(payload);
+    }
     
-    // 3. Clear box
     setInput("");
     setSelectedImage(null);
     setStatus("thinking");

@@ -1,12 +1,31 @@
 import React, { useState, useEffect, useRef } from "react";
 // 1. UPDATED IMPORTS: Added Paperclip and X for the file upload UI
-import { Terminal, Cpu, MessageSquare, Menu, Send, Paperclip, X } from "lucide-react";
+import { Terminal, Cpu, MessageSquare, Menu, Send, Paperclip, X , Zap, Activity, MapPin,
+  Shield, Target, User, Disc
+} from "lucide-react";
 import useClara from "./hooks/useClara";
 import Typewriter from "./components/Typewriter";
 
 export default function Layout() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isBrainOpen, setIsBrainOpen] = useState(true);
+  const [viewImage, setViewImage] = useState(null);
+  const [isFocused, setIsFocused] = useState(false);
+  const [soul, setSoul] = useState(null);
+
+  useEffect(() => {
+    // Poll the soul every 5 seconds to keep vitals "alive"
+    const fetchSoul = () => {
+      fetch("http://localhost:8001/soul")
+        .then(res => res.json())
+        .then(data => setSoul(data))
+        .catch(err => console.error("Soul fetch error:", err));
+    };
+    
+    fetchSoul(); // Initial fetch
+    const interval = setInterval(fetchSoul, 5000); // Live update
+    return () => clearInterval(interval);
+  }, []);
   
   // 2. UPDATED HOOK: Getting the image tools from useClara
   const { 
@@ -50,18 +69,116 @@ export default function Layout() {
     <div className="flex h-screen w-full bg-[var(--bg-depth)] text-gray-200 overflow-hidden font-sans">
       
       {/* --- ZONE A: LEFT SIDEBAR --- */}
-      <aside className={`${isSidebarOpen ? "w-64" : "w-0"} transition-all duration-300 border-r border-[var(--border-subtle)] bg-[var(--bg-surface)] flex flex-col`}>
-        <div className="p-4 border-b border-[var(--border-subtle)] flex items-center gap-2">
-          <Terminal size={20} className="text-emerald-500" />
-          <span className="font-bold tracking-wider text-emerald-500">AGENT_ZERO</span>
+      <aside 
+        className={`
+          bg-black/40 border-r border-white/5 flex-col hidden md:flex backdrop-blur-md relative overflow-hidden transition-all duration-300 ease-in-out
+          ${isSidebarOpen ? "w-72 translate-x-0 opacity-100" : "w-0 -translate-x-full opacity-0 border-none"}
+        `}
+      >
+        
+        {/* BACKGROUND NOISE (Optional Texture) */}
+        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-5 pointer-events-none"></div>
+
+        {/* HEADER */}
+        <div className="p-6 border-b border-white/5">
+          <h1 className="text-xl font-bold text-emerald-500 tracking-wider flex items-center gap-2 font-mono">
+            <Terminal size={20} />
+            C.L.A.R.A.
+          </h1>
+          <div className="flex items-center gap-2 mt-2">
+             <span className="relative flex h-2 w-2">
+               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+             </span>
+             <p className="text-[10px] text-emerald-400/60 font-mono tracking-widest">SYSTEM ONLINE // V2.0.4</p>
+          </div>
         </div>
-        <div className="p-4 text-xs text-gray-500 mt-auto">
-          Status: <span className={status === "connected" || status === "thinking" ? "text-green-500" : "text-red-500"}>{status.toUpperCase()}</span>
-        </div>
+
+        {/* DYNAMIC CONTENT */}
+        {soul && (
+          <div className="flex-1 overflow-y-auto p-6 space-y-8 scrollbar-hide">
+            
+            {/* 1. IDENTITY SECTION */}
+            <div className="space-y-3">
+              <h3 className="text-[10px] uppercase tracking-[0.2em] text-white/30 font-bold flex items-center gap-2">
+                <User size={10} /> Operator Identity
+              </h3>
+              <div className="bg-white/5 rounded-lg p-4 border border-white/5 relative overflow-hidden group">
+                <div className="absolute top-0 right-0 p-2 opacity-20 group-hover:opacity-100 transition-opacity">
+                  <Shield size={16} />
+                </div>
+                <div className="text-lg font-medium text-white font-mono">{soul.identity.name}</div>
+                <div className="text-xs text-emerald-400 font-mono mt-1">{soul.identity.role}</div>
+                <div className="flex items-center gap-3 mt-4 pt-3 border-t border-white/5">
+                  <div className="flex items-center gap-1 text-[10px] text-gray-400">
+                    <MapPin size={10} /> {soul.identity.location}
+                  </div>
+                  <div className="flex items-center gap-1 text-[10px] text-gray-400">
+                    <Disc size={10} /> {soul.identity.clearance}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. MISSION STATUS */}
+            <div className="space-y-3">
+              <h3 className="text-[10px] uppercase tracking-[0.2em] text-white/30 font-bold flex items-center gap-2">
+                <Target size={10} /> Current Objective
+              </h3>
+              <div className="bg-gradient-to-r from-emerald-900/10 to-transparent p-4 rounded border-l-2 border-emerald-500 relative">
+                 <div className="text-xs text-emerald-100 font-medium">{soul.mission.current}</div>
+                 <div className="flex justify-between items-center mt-2">
+                    <span className="text-[10px] bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/20">
+                      {soul.mission.status}
+                    </span>
+                    <span className="text-[10px] text-white/20 font-mono">{soul.mission.phase}</span>
+                 </div>
+              </div>
+            </div>
+
+            {/* 3. SKILL MATRIX (Tags) */}
+            <div className="space-y-3">
+              <h3 className="text-[10px] uppercase tracking-[0.2em] text-white/30 font-bold flex items-center gap-2">
+                <Zap size={10} /> Competency Matrix
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                {soul.skills?.map((skill, i) => (
+                  <span key={i} className="text-[10px] px-2 py-1 rounded bg-[#111] text-gray-300 border border-white/10 hover:border-emerald-500/50 hover:text-emerald-400 transition-colors cursor-default">
+                    {skill}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+          </div>
+        )}
+        
+        {/* 4. SYSTEM VITALS (Footer) */}
+        {soul && (
+          <div className="p-4 border-t border-white/5 bg-black/20 backdrop-blur-lg">
+             {/* CPU ROW (Full Width) */}
+             <div className="flex items-center gap-2 text-[10px] font-mono text-emerald-500/80 mb-2 border-b border-white/5 pb-2">
+                <Cpu size={12} />
+                <span className="truncate">{soul.vitals.cpu}</span>
+             </div>
+
+             {/* GPU & RAM ROW (Split) */}
+             <div className="grid grid-cols-2 gap-2 text-[10px] font-mono text-white/40">
+                <div className="flex items-center gap-2">
+                  <Zap size={12} className="text-yellow-500/50"/> 
+                  <span>{soul.vitals.gpu}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Activity size={12} className="text-blue-500/50"/> 
+                  <span>RAM: {soul.vitals.memory_usage}</span>
+                </div>
+             </div>
+          </div>
+        )}
       </aside>
 
       {/* --- ZONE B: MAIN CHAT --- */}
-      <main className="flex-1 flex flex-col relative min-w-0">
+      <main className="flex-1 flex flex-col relative h-screen overflow-hidden bg-[#0a0a0a]">
         
         {/* HEADER */}
         <header className="h-14 border-b border-[var(--border-subtle)] flex items-center justify-between px-4 bg-[var(--bg-depth)]/80 backdrop-blur-md sticky top-0 z-10">
@@ -76,7 +193,7 @@ export default function Layout() {
         </header>
 
         {/* MESSAGES AREA */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-6 scroll-smooth">
+        <div className="flex-1 overflow-y-auto p-4 space-y-6 scroll-smooth pb-32">
           {messages.length === 0 ? (
             <div className="text-center mt-20 opacity-30">
               <h1 className="text-4xl font-black mb-2">INITIALIZED</h1>
@@ -85,12 +202,27 @@ export default function Layout() {
           ) : (
             messages.map((msg, i) => (
               <div key={i} className={`flex ${msg.sender === "User" ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[80%] p-4 rounded-xl 
+                
+                {/* 1. THE BUBBLE CONTAINER (Wrap everything here) */}
+                <div className={`max-w-[80%] p-4 rounded-xl flex flex-col gap-2 
                   ${msg.sender === "User" 
                     ? "bg-[#222] border border-[#333]" 
                     : "bg-emerald-900/10 border border-emerald-500/20 text-emerald-100 shadow-[0_0_15px_rgba(16,185,129,0.1)]"
                   }`}>
                   
+                  {/* 2. IMAGE (Inside the bubble) */}
+                  {msg.image && (
+                    <div className="group relative w-full">
+                      <img 
+                        src={msg.image} 
+                        alt="Upload" 
+                        onClick={() => setViewImage(msg.image)} // Triggers the lightbox
+                        className="w-full h-auto max-h-64 object-cover rounded-lg border border-white/10 cursor-zoom-in hover:brightness-110 transition-all"
+                      />
+                    </div>
+                  )}
+
+                  {/* 3. TEXT (Below the image) */}
                   {msg.sender === "Clara" && i === messages.length - 1 ? (
                     <Typewriter text={msg.text} speed={15} /> 
                   ) : (
@@ -105,71 +237,72 @@ export default function Layout() {
         </div>
 
         {/* --- NEW INPUT CAPSULE --- */}
-        <div className="p-4 w-full max-w-3xl mx-auto">
-          <div className={`
-              relative transition-all duration-500 rounded-2xl bg-[var(--bg-surface)] border border-[var(--border-subtle)] 
-              shadow-lg shadow-black/50 p-2 flex flex-col gap-2
-              ${status === 'thinking' ? 'animate-breathe' : ''}
-          `}>
-             
-             {/* THUMBNAIL PREVIEW (Only shows if image is selected) */}
-             {selectedImage && (
-               <div className="relative w-16 h-16 ml-2 mt-2 group">
-                 <img 
-                   src={selectedImage} 
-                   alt="Preview" 
-                   className="w-full h-full object-cover rounded-lg border border-[var(--border-subtle)]" 
-                 />
-                 <button 
-                   onClick={() => setSelectedImage(null)}
-                   className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-0.5 hover:bg-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                 >
-                   <X size={12} />
-                 </button>
-               </div>
-             )}
+        <div className="absolute bottom-0 left-0 w-full p-6 z-40 bg-gradient-to-t from-[#0a0a0a] via-[#0a0a0a]/90 to-transparent">
+          
+          <div 
+            className={`
+              relative flex items-end gap-3 p-3 rounded-2xl border transition-all duration-500 ease-out
+              ${status === "thinking" 
+                ? "bg-emerald-900/10 border-emerald-500/50 shadow-[0_0_30px_-5px_rgba(16,185,129,0.2)] animate-pulse" 
+                : isFocused 
+                  ? "bg-black/80 border-emerald-500/30 shadow-[0_0_50px_-10px_rgba(16,185,129,0.1)]" 
+                  : "bg-[#111]/50 border-white/5 shadow-none backdrop-blur-sm"
+              }
+            `}
+          >
+            {/* ATTACHMENT BUTTON */}
+            <button 
+              onClick={() => document.getElementById('file-upload').click()}
+              className={`p-3 rounded-xl transition-colors ${selectedImage ? "text-emerald-400 bg-emerald-900/20" : "text-white/40 hover:text-white hover:bg-white/5"}`}
+            >
+              <Paperclip size={20} />
+            </button>
+            <input 
+              type="file" 
+              id="file-upload" 
+              className="hidden" 
+              accept="image/*"
+              onChange={handleImageUpload}
+            />
 
-             <div className="flex items-end gap-2">
-               {/* UPLOAD BUTTON */}
-               <label className="p-3 text-gray-400 hover:text-emerald-400 cursor-pointer transition-colors rounded-xl hover:bg-white/5">
-                  <Paperclip size={20} />
-                  <input 
-                    type="file" 
-                    accept="image/*" 
-                    className="hidden" 
-                    onChange={handleImageUpload}
-                  />
-               </label>
+            {/* TEXT INPUT AREA */}
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  sendMessage();
+                }
+              }}
+              onFocus={() => setIsFocused(true)} // <--- Glow ON
+              onBlur={() => setIsFocused(false)}   // <--- Glow OFF
+              placeholder="Message Clara..."
+              className="w-full bg-transparent text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-0 resize-none py-3 max-h-32"
+              rows={1}
+              style={{ minHeight: '44px' }}
+            />
 
-               {/* AUTO-EXPANDING TEXTAREA */}
-               <textarea 
-                 ref={textareaRef}
-                 value={input}
-                 onChange={(e) => setInput(e.target.value)}
-                 onKeyDown={handleKeyDown}
-                 placeholder={status === 'thinking' ? "Agent is thinking..." : "Message Clara..."}
-                 disabled={status === 'thinking'}
-                 rows={1}
-                 className="w-full bg-transparent border-none focus:ring-0 resize-none py-3 max-h-48 overflow-y-auto text-gray-200 placeholder-gray-500/50"
-               />
-               
-               {/* SEND BUTTON */}
-               <button 
-                 onClick={sendMessage} 
-                 disabled={!input.trim() && !selectedImage}
-                 className={`p-3 rounded-xl transition-all ${
-                    input.trim() || selectedImage 
-                      ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-[0_0_10px_rgba(16,185,129,0.4)]" 
-                      : "bg-white/5 text-gray-600 cursor-not-allowed"
-                 }`}
-               >
-                  <Send size={18} />
-               </button>
+            {/* SEND BUTTON */}
+            <button 
+              onClick={sendMessage}
+              disabled={!input.trim() && !selectedImage}
+              className={`p-3 rounded-xl transition-all duration-300 ${
+                input.trim() || selectedImage 
+                  ? "bg-emerald-600 text-white shadow-[0_0_15px_rgba(16,185,129,0.4)] hover:bg-emerald-500" 
+                  : "bg-[#222] text-gray-600 cursor-not-allowed"
+              }`}
+            >
+              <Send size={20} />
+            </button>
+          </div>
+          
+          {/* IMAGE PREVIEW (Optional: If you want to see the filename below the bar) */}
+          {selectedImage && (
+             <div className="absolute -top-8 left-6 text-xs text-emerald-400 bg-black/80 px-2 py-1 rounded border border-emerald-500/30">
+                Image Attached
              </div>
-          </div>
-          <div className="text-center mt-2 text-[10px] text-gray-600 font-mono">
-             Clara v2.0 | Press Shift+Enter for new line
-          </div>
+          )}
         </div>
       </main>
 
@@ -214,6 +347,22 @@ export default function Layout() {
            <div ref={brainEndRef} className="h-4" />
         </div>
       </aside>
+      {/* --- LIGHTBOX MODAL --- */}
+      {viewImage && (
+        <div 
+          className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200"
+          onClick={() => setViewImage(null)} // Click anywhere to close
+        >
+          <img 
+            src={viewImage} 
+            alt="Full Screen" 
+            className="max-w-full max-h-full rounded-lg shadow-2xl border border-white/10" 
+          />
+          <button className="absolute top-6 right-6 text-white/50 hover:text-white transition-colors">
+            <X size={32} />
+          </button>
+        </div>
+      )}
 
     </div>
   );
