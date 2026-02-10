@@ -1,60 +1,38 @@
-1. requirements.txt
-Overwrite your current file with this. I included onnxruntime-gpu explicitly to ensure the RTX 3050 is used.
+# CLARA (Contextual Locally Aware Robust Agent)
 
-Plaintext
+> **"The Brain Gets a Body."**
 
-# --- CORE SYSTEM ---
-requests
-numpy
-colorama
-pyaudio
+A fully local, multi-modal AI orchestration engine designed to run on **consumer hardware (RTX 3050 - 4GB VRAM)**.
 
-# --- EARS (Hearing) ---
-faster-whisper
+CLARA is not just a chatbot; it is a **Hybrid Agentic System** that combines local sensory processing (Vision/Voice) with high-level reasoning (Cloud/Local Hybrid) to execute complex tasks with stateful memory.
 
-# --- MOUTH (Speech) ---
-# Critical: ONNX Runtime GPU is required for fast neural speech on RTX 3050
-kokoro-onnx
-sounddevice
-onnxruntime-gpu
+---
 
-# --- EYES (Vision) ---
-transformers
-pillow
-einops
-accelerate
-torch
-torchvision
-torchaudio
-2. README.md
-This is the "Manual." It explains the architecture (Gatekeeper -> Executor) and how to handle the heavy files that Git ignores.
+## 🧠 The Architecture (Update 3.0)
 
-Markdown
-
-# CLARA (AGENT_ZERO)
-
-**Centralized Local Autonomous Responsive Agent**
-A fully local, multi-modal AI agent designed for **RTX 3050 (4GB VRAM)** hardware.
-
-## 🧠 The Architecture (The "God Stack")
-CLARA runs on a strict memory budget (4GB VRAM) by offloading logic to the cloud while keeping sensors local.
+CLARA runs on a strict memory budget by using a **"Split-Brain" Architecture**. Sensors are local (Privacy/Speed), while reasoning is routed based on complexity.
 
 | Module | Engine | VRAM Cost | Description |
 | :--- | :--- | :--- | :--- |
-| **Gatekeeper** | Grok (API) | 0 GB | The "Pre-frontal Cortex." Decides intent (TASK vs CHAT) and manages memory. |
+| **The Soul (UI)** | React + Vite | N/A | Real-time dashboard visualizing memory streams, state, and thought processes. |
+| **Gatekeeper** | Hybrid (Phi-3 / Grok) | Variable | The "Pre-frontal Cortex." Routes tasks: **Simple** (Local) vs **Complex** (Cloud). |
+| **Hippocampus** | JSON Stream / Vector | Low | **Long-Term Memory.** Retains context across turns (e.g., "What was that watch I showed you?"). |
 | **Ears** | Faster-Whisper | ~1.2 GB | Real-time transcription (Medium.en model). |
-| **Mouth** | Kokoro v0.19 | ~0.8 GB | Neural TTS running on ONNX/CUDA. Tuned for "Witty/Seductive" tone. |
-| **Eyes** | Moondream2 | ~1.6 GB | Lightweight Vision Transformer for image analysis. |
+| **Mouth** | Kokoro v0.19 | ~0.8 GB | Neural TTS (ONNX/CUDA). Tuned for "Witty/Seductive" tone. |
+| **Eyes** | Moondream2 | ~1.6 GB | Lightweight Vision Transformer for instant image analysis. |
 
 ---
 
 ## 🛠️ Prerequisites
-Before installing Python libraries, ensure your Windows environment is ready:
 
-1.  **NVIDIA CUDA Toolkit:** Required for GPU acceleration.
-2.  **eSpeak NG (Critical):** * Download from [GitHub Releases](https://github.com/espeak-ng/espeak-ng/releases).
+Before installing, ensure your Windows environment is ready for GPU acceleration.
+
+1.  **NVIDIA CUDA Toolkit:** Required for GPU acceleration (CUDA 12.x).
+2.  **Node.js & npm:** Required to run the React Dashboard.
+3.  **eSpeak NG (Critical):**
+    * Download from [GitHub Releases](https://github.com/espeak-ng/espeak-ng/releases).
     * **Action:** Add `C:\Program Files\eSpeak NG` to your System PATH.
-3.  **FFmpeg:**
+4.  **FFmpeg:**
     * Run `winget install ffmpeg` in PowerShell.
 
 ---
@@ -65,65 +43,76 @@ Before installing Python libraries, ensure your Windows environment is ready:
 ```bash
 git clone [https://github.com/Angry-Nutrino/AGENT_ZERO.git](https://github.com/Angry-Nutrino/AGENT_ZERO.git)
 cd AGENT_ZERO
-2. Set up Python Environment
-Bash
+```
 
+
+Backend Setup (The Brain)
+
+```bash
+# Create Virtual Environment
 python -m venv venv
 .\venv\Scripts\activate
-3. Install Dependencies (The "Torch" Dance)
-To ensure GPU support works, install PyTorch before the requirements file.
+```
 
-Bash
-
-# 1. Install PyTorch with CUDA 12.1 support
+# Install PyTorch with CUDA support (CRITICAL STEP)
+```bash
 pip install torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu121](https://download.pytorch.org/whl/cu121)
+```
 
-# 2. Install the rest of the stack
+# Install the rest of the stack
+```bash
 pip install -r requirements.txt
-4. Restore the Models (Crucial Step)
-Since heavy model weights are ignored by Git to save space, you must restore them.
+```
 
-For the Mouth (Kokoro): Run the included setup script. It will download kokoro-v0_19.onnx and voices.bin automatically.
+# Frontend Setup (The Soul)
+```bash
+cd frontend
+npm install
+# Keep this terminal open later to run "npm run dev"
+```
+### Configuration (API Keys)
+CLARA uses a Hybrid Brain.
 
-Bash
+Local Mode: Uses Phi-3 Mini (No keys required, higher VRAM usage).
 
-python setup_mouth.py
-For the Eyes (Moondream): The first time you run the vision module, it will automatically download the weights from HuggingFace to your cache.
+Cloud Mode (Recommended for Logic): Uses Grok/xAI API.
 
-Bash
+Create a .env file in the root directory:
 
-python core_logic/eyes.py
-🎮 Usage
-1. The Main Brain (Gatekeeper Loop)
-This runs the full loop: Listen -> Gatekeeper Decision -> Action -> Speak.
+Code snippet
+XAI_API_KEY=your_key_here
+(Note: The system gracefully falls back if no key is found, but complex reasoning may degrade).
 
-Bash
+### 🎮 Usage
+### Start the System
+You need two terminals running (One for Brain, One for Body).
 
-python main.py
-2. Module Testing
-You can test individual senses to debug issues.
+### Terminal 1: The Backend (FastAPI)
 
-Test Hearing: python core_logic/ears.py
+```bash
+python api.py
+# Server starts at http://localhost:8000
+```
+### Terminal 2: The Frontend (React)
 
-Test Speech: python core_logic/mouth.py (Checks for CUDA/eSpeak errors)
+```bash
+cd frontend
+npm run dev
+# Dashboard opens at http://localhost:5173
+```
+ 
+### Module Testing
+Debug individual senses without launching the full UI:
 
-Test Vision: python core_logic/eyes.py (Analyzes a test image)
+Hearing: python core_logic/ears.py
 
-⚠️ Troubleshooting
-"DLL load failed" (Kokoro): * You forgot to install eSpeak NG or add it to your PATH. Restart your terminal after installing.
+Speech: python core_logic/mouth.py
 
-Voice sounds robotic/slow: * Check if onnxruntime-gpu is installed. If it's running on CPU, the latency will be high.
+Vision: python core_logic/eyes.py
 
-Git Push Failures:
+### ⚠️ Troubleshooting
+"DLL load failed" (Kokoro): You forgot to install eSpeak NG or add it to your PATH. Restart your terminal.
 
-If you add large files (weights), Git will block the push. Ensure .gitignore is active.
+Voice sounds robotic/slow: Check if onnxruntime-gpu is installed. If it's running on CPU, latency will be high.
 
-
-### Final Instructions for You
-1.  Save these two files.
-2.  Run the git commands one last time to push the documentation:
-
-```powershell
-git add requirements.txt README.md
-git commit -m "Add proper documentation and requirements"
-git push
+Git Push Failures: Large model weights (Bin files) are ignored by .gitignore. Do not try to force push them.

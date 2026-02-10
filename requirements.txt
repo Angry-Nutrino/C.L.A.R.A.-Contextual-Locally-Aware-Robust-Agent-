@@ -3,6 +3,13 @@ requests
 numpy
 colorama
 pyaudio
+python-dotenv  # For safely loading API keys
+
+# --- BACKEND API (The Nervous System) ---
+fastapi
+uvicorn
+python-multipart
+websockets
 
 # --- EARS (Hearing) ---
 faster-whisper
