@@ -30,7 +30,8 @@ export default function Layout() {
   // 2. UPDATED HOOK: Getting the image tools from useClara
   const { 
     messages, thoughts, input, setInput, sendMessage, status,
-    selectedImage, setSelectedImage, handleImageUpload 
+    selectedImage, setSelectedImage, handleImageUpload,
+    streamingContent
   } = useClara();
   
   const chatEndRef = useRef(null);
@@ -194,7 +195,7 @@ export default function Layout() {
 
         {/* MESSAGES AREA */}
         <div className="flex-1 overflow-y-auto p-4 space-y-6 scroll-smooth pb-32">
-          {messages.length === 0 ? (
+          {messages.length === 0 && !streamingContent ? (
             <div className="text-center mt-20 opacity-30">
               <h1 className="text-4xl font-black mb-2">INITIALIZED</h1>
               <p>Waiting for input...</p>
@@ -223,16 +224,25 @@ export default function Layout() {
                   )}
 
                   {/* 3. TEXT (Below the image) */}
-                  {msg.sender === "Clara" && i === messages.length - 1 ? (
-                    <Typewriter text={msg.text} speed={15} /> 
-                  ) : (
-                    <p className="whitespace-pre-wrap">{msg.text}</p>
-                  )}
+                  <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
                   
                 </div>
               </div>
             ))
           )}
+
+          {/* --- THE PHANTOM BUBBLE (Live Stream) --- */}
+          {streamingContent && (
+            <div className="flex justify-start animate-in fade-in duration-100">
+              <div className="max-w-[80%] p-4 rounded-xl flex flex-col gap-2 bg-emerald-900/10 border border-emerald-500/20 text-emerald-100 shadow-[0_0_15px_rgba(16,185,129,0.1)]">
+                <p className="whitespace-pre-wrap leading-relaxed">
+                  {streamingContent}
+                  <span className="inline-block w-2 h-4 ml-1 bg-emerald-400 animate-pulse align-middle"></span>
+                </p>
+              </div>
+            </div>
+          )}
+
           <div ref={chatEndRef} />
         </div>
 
@@ -331,12 +341,8 @@ export default function Layout() {
                  <span className={`block mb-1 text-[10px] tracking-widest ${isLast ? "text-emerald-400" : "text-purple-400/70"}`}>
                    [{t.time}]
                  </span>
-                 <span className={`leading-relaxed ${isLast ? "text-emerald-100" : "text-gray-400"}`}>
-                   {isLast ? (
-                     <Typewriter text={t.text} speed={5} /> 
-                   ) : (
-                     t.text
-                   )}
+                 <span className={`leading-relaxed whitespace-pre-wrap ${isLast ? "text-emerald-100" : "text-gray-400"}`}>
+                   {t.text}
                  </span>
                  {isLast && (
                     <span className="absolute -left-[5px] top-0 w-2 h-2 bg-emerald-400 rounded-full animate-ping" />

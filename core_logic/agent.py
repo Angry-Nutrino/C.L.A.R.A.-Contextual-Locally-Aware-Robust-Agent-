@@ -1,5 +1,6 @@
 import re
 import json
+import asyncio
 from langchain_community.llms import Ollama
 from .tools import run_python_code, web_search, get_time_date, consult_archive
 from .memory_manager import free_gpu_memory
@@ -197,12 +198,14 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
                 clean_json = match.group(0)
                 return json.loads(clean_json)
         except Exception:
+            print(f"❌ JSON Parse Failed on fallback: {text[:50]}...")
             pass
         
         print(f"❌ JSON Parse Failed completely on: {text[:50]}...")
         return None
 
-    def memorize_episode(self):
+    def memorize_episode(self, chat_snapshot: str):
+        if not chat_snapshot: return
         """
         Dual-Layer Memory Processing:
         1. Summarizes the last session for the Episodic Stream (Always).
@@ -212,20 +215,24 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
         
         # The prompt asks for a JSON object with two keys: 'summary' and 'facts'
         memory_prompt = (
-            "Analyze the interaction above. Perform two tasks:\n"
+            "You are Clara, ALKAMA's personal system agent. Analyze the interaction above. Perform two tasks:\n"
             "1. SUMMARY: Write a concise, 1-2 sentence summary of the interaction from your perspective capturing the necessary details.\n"
             "2. FACTS: Extract any new PERMANENT facts (names, preferences, project constraints) that must be saved forever.\n"
             "Output ```ONLY``` a JSON object in this format strictly, No extra text:\n"
-            "{ \"summary\": \"User asked X, we did Y.\", \"facts\": [\"User likes Z\", \"Project deadline is W\"] }\n"
+            "{ \"summary\": \"Alkama asked X, we did Y.\", \"facts\": [\"Alkama likes Z\", \"Project deadline is W\"] }\n"
             "If no new facts, leave 'facts' as empty list []."
         )
         
         try:
-            # 1. Ask Brain
-            self.llm.append(system(memory_prompt))
-            response = self.llm.sample()
-            content = response.content
+            
+            temp_llm = self.client.chat.create(model="grok-4-1-fast-reasoning")
+            
+            temp_llm.append(system(memory_prompt))
+            print(f"Snapshot for Memory Consolidation:\n{chat_snapshot}")
+            temp_llm.append(user(f"Interaction:\n{chat_snapshot}"))
+            content = temp_llm.sample().content
             print(f"   [Memory] 🧠 Raw consolidation output: {content}")
+            temp_llm=None
             
             # # 2. Sanitize JSON
             # if "```" in content:
@@ -306,7 +313,7 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
             if need_context:
                 print(">> [Memory] Loading Soul from disk...")
                 # <--- NEW: Use CRUD to fetch formatted context
-                mem_context = self.db.get_full_context()
+                mem_context = await self.db.get_full_context()
                 self.llm.append(system(f"PREVIOUS MEMORY:\n{mem_context}"))
             
             # 5. EXECUTE
@@ -319,7 +326,8 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
 
             # 6. SPEAK RESULT
             # 7. THE MEMORIZER
-            self.memorize_episode()
+            chat_snapshot = "\n".join([f"{m.role}: {m.content}" for m in self.llm.messages if m.role != 'system'])
+            asyncio.create_task(asyncio.to_thread(self.memorize_episode, chat_snapshot))
             self.llm = self.client.chat.create(model="grok-4-1-fast-reasoning")
 
             return final_answer
@@ -392,6 +400,7 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
                         response = asyncio.run(self.process_request(user_input))
                         
                         # 4. Speak
+
                         speak(response)
                         
                 except KeyboardInterrupt:
@@ -416,11 +425,60 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
             
             
     async def run_chat(self, on_step_update=None):
-        print(">> [Mode] Chatting...")
+        print(">> [Mode] Chatting (Streaming)...")
         if on_step_update:
             await on_step_update("Thinking...", type="status")
-        response = self.llm.sample()
-        return response.content.split("Final Answer:")[-1].strip()
+            
+        raw_content = ""
+        answer_sent_len = 0
+        
+        # 1. Open the Live Pipe (Native xai_sdk syntax)
+        for response_obj, chunk in self.llm.stream():
+            token = chunk.content
+            if not token:
+                continue
+                
+            raw_content += token
+            
+            # STATE A: Internal Monologue (If it thinks before chatting)
+            if "Thought:" in raw_content and "Final Answer:" not in raw_content:
+                start_idx = raw_content.find("Thought:") + 8
+                current_thought = raw_content[start_idx:].strip()
+                if current_thought and on_step_update:
+                    await on_step_update(current_thought, type="thought", turn_id=0)
+                    
+            # STATE C: The user-facing chat stream
+            elif "Final Answer:" in raw_content:
+                start_idx = raw_content.find("Final Answer:") + 13
+                current_answer = raw_content[start_idx:]
+                
+                # Only send the NEW characters
+                new_chars = current_answer[answer_sent_len:]
+                if new_chars and on_step_update:
+                    await on_step_update(new_chars, type="stream", turn_id=0)
+                    answer_sent_len += len(new_chars)
+                    
+            # Fallback: If it ignores the ReAct format and just talks directly
+            elif "Thought:" not in raw_content and "Final Answer:" not in raw_content and len(raw_content) > 13:
+                new_chars = raw_content[answer_sent_len:]
+                if new_chars and on_step_update:
+                    await on_step_update(new_chars, type="stream", turn_id=0)
+                    answer_sent_len += len(new_chars)
+
+        # 2. Stream Complete. Clean up.
+        import asyncio
+        await asyncio.sleep(0.05) 
+        
+        response_text = raw_content.strip()
+        print(f"Clara (Chat): {response_text}")
+        
+        # 3. Append to internal memory
+        self.llm.append(assistant(response_text))
+        
+        if "Final Answer:" in response_text:
+            return response_text.split("Final Answer:")[-1].strip()
+            
+        return response_text
 
     async def run_task(self, on_step_update=None):
         turn_count = 0
@@ -428,25 +486,43 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
         
         while turn_count < max_turns:
             turn_count += 1
-            print(f"\n[Loop {turn_count}] Thinking...")
+            print(f"\n[Loop {turn_count}] Thinking (Streaming)...")
             
-            response_obj = self.llm.sample()
-            raw_content = response_obj.content
-
-            # --- 2. EXTRACT & SEND THOUGHT ---
-            # We want to send JUST the thought to the UI right now.
-            if on_step_update:
-                # Regex to find "Thought: ... Action:" or just "Thought: ..."
-                import re
-                thought_match = re.search(r"Thought:\s*(.*?)(?=\nAction:|$)", raw_content, re.DOTALL)
+            raw_content = ""
+            answer_sent_len = 0
+            
+            # 1. Open the Live Pipe (Native xai_sdk syntax)
+            for response_obj, chunk in self.llm.stream():
+                token = chunk.content
+                if not token:
+                    continue
+                    
+                raw_content += token
                 
-                if thought_match:
-                    thought_text = thought_match.group(1).strip()
-                    # Send it! "type='thought'" tells UI to show this in the brain panel
-                    await on_step_update(thought_text, type="thought")
-                else:
-                    # Fallback: If no clear thought tag, send the whole start
-                    await on_step_update(raw_content[:100] + "...", type="thought")
+                # STATE C: The user-facing answer.
+                if "Final Answer:" in raw_content:
+                    start_idx = raw_content.find("Final Answer:") + 13
+                    current_answer = raw_content[start_idx:]
+                    
+                    # Only send the NEW characters
+                    new_chars = current_answer[answer_sent_len:]
+                    if new_chars and on_step_update:
+                        await on_step_update(new_chars, type="stream", turn_id=turn_count)
+                        answer_sent_len += len(new_chars)
+                        await asyncio.sleep(0.02)
+                        
+                # STATE B: The code.
+                elif "Action:" in raw_content:
+                    pass 
+                    
+                # STATE A: The internal monologue.
+                elif "Thought:" in raw_content:
+                    start_idx = raw_content.find("Thought:") + 8
+                    current_thought = raw_content[start_idx:].strip()
+                    clean_thought = re.split(r'\n?(?:Action|Final Answer|Observation):?', current_thought)[0].strip()
+                    
+                    if current_thought and on_step_update:
+                        await on_step_update(clean_thought, type="thought", turn_id=turn_count)
             
             import asyncio
             await asyncio.sleep(0.05)  # Small delay to simulate thinking time and allow UI to update

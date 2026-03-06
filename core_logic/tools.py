@@ -8,9 +8,27 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 # from rag import DB_PATH
 import os
 
+
 RAG_ENGINE= None
 current_dir = os.path.dirname(os.path.abspath(__file__))
 DB_PATH=os.path.join(current_dir, "knowledge_base")
+
+# Pre-loading rag for faster inference. 
+print("   [Archive] 🔌 Pre-loading RAG Engine for instant access...")
+_embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+
+if os.path.exists(DB_PATH):
+    RAG_ENGINE = FAISS.load_local(
+        DB_PATH, 
+        _embeddings, 
+        allow_dangerous_deserialization=True 
+    )
+    print("   [Archive] ✅ RAG Engine is Hot.")
+else:
+    RAG_ENGINE = None
+    print("   [Archive] ⚠️ DB Not found. RAG will be disabled.")
+
+
 
 def run_python_code(code: str) -> str:
     redirected_output = StringIO()
@@ -40,8 +58,10 @@ def web_search(query: str):
             query=query,
             include_answer="advanced",
             search_depth="advanced",
+            max_results=2
             )
         return response
+        
     
     except Exception as e:
         return f"Error doing web_search : {e}"
@@ -71,5 +91,6 @@ def consult_archive(query: str) -> str:
     # Pro-tip: Join with a separator so the LLM knows where one chunk ends and another begins
     return "\n---\n".join([doc.page_content for doc in results])
 
-# res= consult_archive("I need the exact burst pressure specifications for the explosion vent. What is the specified burst pressure, and what is the maximum tolerance listed in the Declaration of Conformity?")
-# print(res)
+
+# response_web_search = web_search("What is the price of iphone 15 pro max in INR?")
+# print("Web Search Result:", response_web_search)

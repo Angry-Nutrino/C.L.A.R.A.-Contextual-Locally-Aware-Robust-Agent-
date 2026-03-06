@@ -35,9 +35,9 @@ print("✅ Clara is Alive and Ready.")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     
-    async def send_update(content: str, type="thought"):
+    async def send_update(content: str, type="thought", turn_id=None):
         try:
-            await websocket.send_json({ "type": type, "content": content })
+            await websocket.send_json({ "type": type, "content": content, "turn_id": turn_id })
         except Exception as e:
             print(f"Error sending update: {e}")
 
