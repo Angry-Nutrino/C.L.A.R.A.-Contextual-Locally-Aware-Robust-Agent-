@@ -4,8 +4,8 @@ import asyncio
 from langchain_community.llms import Ollama
 from .tools import run_python_code, web_search, get_time_date, consult_archive
 from .memory_manager import free_gpu_memory
-from .ears import listen_local
-from .kokoro_mouth import speak
+# from .ears import listen_local
+# from .kokoro_mouth import speak
 import os
 from dotenv import load_dotenv
 from xai_sdk import Client
@@ -227,7 +227,7 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
             
             temp_llm = self.client.chat.create(model="grok-4-1-fast-reasoning")
             
-            temp_llm.append(system(memory_prompt))
+            temp_llm.append(user(memory_prompt))
             print(f"Snapshot for Memory Consolidation:\n{chat_snapshot}")
             temp_llm.append(user(f"Interaction:\n{chat_snapshot}"))
             content = temp_llm.sample().content
@@ -258,6 +258,8 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
             
         except Exception as e:
             print(f"   [Memory] ⚠️ Consolidation failed: {e}")
+
+    
 
     async def process_request(self, query, image_data=None, on_step_update=None):
         # query = input("Enter your mission for CLARA: ")
@@ -302,7 +304,7 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
             print(">> [Brain] Analyzing Intent...")
             gate_response = self.llm.sample().content
             self.llm.append(assistant(gate_response))
-            self.llm.append(system("End of analysis."))
+            self.llm.append(assistant("End of analysis."))
                     
             intent = "TASK" if "<intent>TASK</intent>" in gate_response else "CHAT"
             need_context = "<context_needed>TRUE</context_needed>" in gate_response
@@ -314,7 +316,7 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
                 print(">> [Memory] Loading Soul from disk...")
                 # <--- NEW: Use CRUD to fetch formatted context
                 mem_context = await self.db.get_full_context()
-                self.llm.append(system(f"PREVIOUS MEMORY:\n{mem_context}"))
+                self.llm.append(assistant(f"PREVIOUS MEMORY:\n{mem_context}"))
             
             # 5. EXECUTE
             self.llm.append(user(f"Now, execute this request: {final_prompt}"))
@@ -326,7 +328,13 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
 
             # 6. SPEAK RESULT
             # 7. THE MEMORIZER
-            chat_snapshot = "\n".join([f"{m.role}: {m.content}" for m in self.llm.messages if m.role != 'system'])
+            # chat_snapshot = "\n".join([f"{m.role}: {m.content}" for m in self.llm.messages if m.role != 'system'])\
+            # Grok uses numbers instead of strings for roles. 1 is user, 2 is assistant, 3 is system. We want to exclude system messages.
+            chat_snapshot = "\n".join([
+                f"{'User' if str(m.role) == '1' else 'Clara'}: {m.content}" 
+                for m in self.llm.messages 
+                if str(m.role) not in ['3', 'system']
+            ])
             asyncio.create_task(asyncio.to_thread(self.memorize_episode, chat_snapshot))
             self.llm = self.client.chat.create(model="grok-4-1-fast-reasoning")
 
@@ -375,7 +383,7 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
                 response = asyncio.run(self.process_request(final_prompt))
 
             # Optional: Speak locally
-            speak(response)
+            # speak(response)
             
             return response
 
@@ -386,7 +394,7 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
             while True:
                 try:
                     # 1. Listen (Blocking - this is fine to stay sync)
-                    user_input = listen_local()
+                    # user_input = listen_local()
                     
                     if user_input:
                         # 2. Wake Word Check
@@ -401,7 +409,7 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
                         
                         # 4. Speak
 
-                        speak(response)
+                        # speak(response)
                         
                 except KeyboardInterrupt:
                     print("\n\n⌨️ MANUAL OVERRIDE ENGAGED")
@@ -413,7 +421,7 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
                             
                         # Manual Input Processing (⚠️ FIX: Wrap in asyncio.run)
                         response = asyncio.run(self.process_request(manual_input))
-                        speak(response)
+                        # speak(response)
                         print("🎤 Returning to Voice Mode...\n")
                         
                     except KeyboardInterrupt:

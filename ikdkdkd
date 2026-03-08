@@ -1,0 +1,65 @@
+[33mcommit 773edc52505731b522c2c6a42e2989c6be0f8c48[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m
+Author: ALKAMA EQBAL <alkamaeqbal@gmail.com>
+Date:   Fri Mar 6 18:30:33 2026 +0530
+
+    Added Streaming, Changed the whole interface dynamics to fit it, Re-wrote consolidation for better
+
+[33mcommit a0d596c02b2055c64f6fd12b89252ff0167c3432[m
+Author: ALKAMA EQBAL <alkamaeqbal@gmail.com>
+Date:   Tue Feb 10 10:24:20 2026 +0530
+
+    Updated Readme and Requirements to sunc the current updates
+
+[33mcommit f5ed78a3cff66e2240412b45dc8bf35c0305caed[m
+Author: ALKAMA EQBAL <alkamaeqbal@gmail.com>
+Date:   Tue Feb 10 09:08:54 2026 +0530
+
+    Just for surity that I didn't leave anything
+
+[33mcommit e407d2ca5ce8e613755082c040dbddbbf15deba1[m
+Author: ALKAMA EQBAL <alkamaeqbal@gmail.com>
+Date:   Sun Feb 8 16:04:02 2026 +0530
+
+    Added a better UI, Added Image functionality and much better transitions
+
+[33mcommit 33c14071f87a2a62215430ffc6e62458f57eb7e3[m
+Author: ALKAMA EQBAL <alkamaeqbal@gmail.com>
+Date:   Thu Feb 5 15:50:13 2026 +0530
+
+    A fully functional agent with interface is ready, Next step to beautify it
+
+[33mcommit 834dc23ba81f79ebfba66df96ffef0c14d9be140[m
+Author: ALKAMA EQBAL <alkamaeqbal@gmail.com>
+Date:   Wed Feb 4 17:24:33 2026 +0530
+
+    Final touches for the first version done, Onto the front-end now(A lot of tweaks in between will be coming)
+
+[33mcommit cc84f17671290691fd5e8fde30c119652130c99e[m
+Author: ALKAMA EQBAL <alkamaeqbal@gmail.com>
+Date:   Wed Feb 4 12:55:26 2026 +0530
+
+    Added context for prev 10 convos, and long term memory
+
+[33mcommit cd9ca36fe48a1b6b14fbe9941f4f0149c542b7e6[m
+Author: ALKAMA EQBAL <alkamaeqbal@gmail.com>
+Date:   Wed Feb 4 12:53:30 2026 +0530
+
+    Stop tracking memory.json
+
+[33mcommit 6ecf2a4a1d1f8d82bc303b11667afcb45b7760c6[m
+Author: ALKAMA EQBAL <alkamaeqbal@gmail.com>
+Date:   Sat Dec 27 23:13:29 2025 +0530
+
+    Added context and update with gatekeeper prompt
+
+[33mcommit 2b58d890a583cb07da3821a2ad887d18f73e939c[m
+Author: ALKAMA EQBAL <alkamaeqbal@gmail.com>
+Date:   Wed Dec 24 12:27:07 2025 +0530
+
+    Initial commit added readme
+
+[33mcommit 15a8c2e1ee9da6dae1461f38bb3efca23aaa8d8b[m
+Author: ALKAMA EQBAL <alkamaeqbal@gmail.com>
+Date:   Wed Dec 24 12:21:39 2025 +0530
+
+    Initial commit (Clean - No Models)
