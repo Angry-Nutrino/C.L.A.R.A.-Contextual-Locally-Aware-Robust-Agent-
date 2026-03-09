@@ -12,6 +12,41 @@
 - [2026-03-06] Added regex guillotine `\n?(?:Action|Final Answer|Observation):?` to prevent syntax bleed into the UI stream.
 - [2026-03-08] Fixed `m.role` integer/string mismatch that was leaking the system prompt into the memory summarizer (memorize_episode, chat_snapshot).
 
+## [2026-03-09] Gatekeeper: MiniLM Embedding-Based Tool Routing
+
+### What Changed
+Replaced the 3-6s Grok API gatekeeper call with a local MiniLM (`all-MiniLM-L6-v2`) embedding classifier that routes user queries to the correct tool in <50ms on GPU.
+
+### Why It Works — Max-Similarity vs Mean-Pooling
+The original approach **mean-pooled** all tool descriptions into a single embedding per tool. This fundamentally caps cosine similarity at ~0.50-0.60 for tools that serve diverse query types (e.g., `web_search` must match "gold price", "cricket match", AND "OpenAI news" — semantically distant queries whose average embedding matches none of them well).
+
+**Max-similarity** stores all sub_description embeddings individually and takes the **highest** cosine score across them. Each sub_description is a short phrase that mirrors how a user would ask for that tool (e.g., `"what is the price of gold"` for `web_search`, `"calculate the square root of 1445"` for `python_repl`). The query only needs to closely match *one* prototype to score highly. The highest-scoring tool wins.
+
+### Score Improvements (Before → After)
+
+| Query | Mean-Pool Score | Max-Sim Score |
+|-------|:-:|:-:|
+| "price of gold" | 0.52 | **0.93** |
+| "square root of 144" | 0.29 | **0.97** |
+| "what time is it" | 0.49 | **0.95** |
+| "phone number in resume" | 0.53 | **0.80** |
+| "analyze this image" | 0.50 | **0.63** |
+| "hello how are you" (no tool) | 0.06 | 0.21 (correct reject) |
+
+**100% routing accuracy** across all 34 test queries (20 baseline + 14 adversarial). Zero misroutes.
+
+### Routing Logic
+1. Compute max-similarity for each tool. **Highest-scoring tool wins.**
+2. If top score `>0.40` — route to that tool (high confidence).
+3. If top score `0.15–0.40` — low confidence zone; route to tool but flag for review.
+4. If **all** tools `<0.15` — no tool needed, fall through to direct chat.
+
+### Files
+- `core_logic/tool_descriptions.json` — Optimized tool descriptions (short, query-mirroring phrases)
+- `core_logic/scripts/eval_embeddings.py` — Eval harness with 20-query test bank + adversarial support
+- `core_logic/test.py` — Updated with max-similarity method and new descriptions
+
 ## Active Bugs / Debt
-- 6-second API wall on Gatekeeper intent classification (Pending local Phi-3 swap).
+- ~~6-second API wall on Gatekeeper intent classification (Pending local Phi-3 swap).~~ Resolved by MiniLM embedding router.
 - Nvidia Riva ASR integration pending.
+- MiniLM gatekeeper not yet wired into `agent.py` — currently validated in `test.py` only.

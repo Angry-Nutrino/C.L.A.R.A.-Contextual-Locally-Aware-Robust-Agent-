@@ -315,7 +315,7 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
             if need_context:
                 print(">> [Memory] Loading Soul from disk...")
                 # <--- NEW: Use CRUD to fetch formatted context
-                mem_context = await self.db.get_full_context()
+                mem_context =  self.db.get_full_context()
                 self.llm.append(assistant(f"PREVIOUS MEMORY:\n{mem_context}"))
             
             # 5. EXECUTE
@@ -336,6 +336,7 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
                 if str(m.role) not in ['3', 'system']
             ])
             asyncio.create_task(asyncio.to_thread(self.memorize_episode, chat_snapshot))
+            # Re-intializing Clara's brain to clear the context from the brain
             self.llm = self.client.chat.create(model="grok-4-1-fast-reasoning")
 
             return final_answer
