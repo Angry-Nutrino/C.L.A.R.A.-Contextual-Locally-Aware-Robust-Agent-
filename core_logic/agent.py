@@ -144,8 +144,22 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
         self.db = crud()
         print(f"Initializing Clara with model : {model_name}")
         self.llm =None
+        #pre compute embeddings for tool selection
+        self.miniLM= SentenceTransformer('all-MiniLM-L6-v2').to('cuda')
+        self.tool_emb= self.build_tool_embeddings()
         self.load_clara(model_name)
         print("Brain loaded")
+
+    def _build_tool_embeddings(self):
+        with open("core_logic/tool_descriptions.json") as f:
+            tools = json.load(f)
+        self.tool_names = [t["name"] for t in tools]
+        embs = []
+        for tool in tools:
+            texts = [tool["description"]] + tool["sub_descriptions"]
+            embs.append(self.miniLM.encode(texts, convert_to_tensor=True))
+        return embs  # List of (N_subs, 384) tensors — ready for max-similarity
+
 
     def load_clara(self, model_name="phi3:mini"):
         try:

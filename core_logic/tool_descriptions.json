@@ -1,14 +1,13 @@
 [
   {
     "name": "web_search",
-    "description": "search the web for prices news and information",
+    "description": "find prices news and information on the internet",
     "sub_descriptions": [
       "what is the price of gold",
-      "stock price of Apple AAPL",
-      "latest news about OpenAI",
+      "stock price of Apple AAPL or Samsung",
+      "latest news about OpenAI or any topic",
       "what is bitcoin trading at",
-      "who won the cricket match",
-      "search online for facts"
+      "who won the cricket match or game"
     ]
   },
   {
@@ -24,7 +23,7 @@
   },
   {
     "name": "consult_archive",
-    "description": "search resume CV and knowledge base",
+    "description": "look up resume CV and knowledge base",
     "sub_descriptions": [
       "find the phone number in my resume",
       "what skills are listed in my CV",
@@ -35,11 +34,10 @@
   },
   {
     "name": "date_time",
-    "description": "get current date and time",
+    "description": "get current date and time right now",
     "sub_descriptions": [
       "what is today's date and time",
-      "what time is it right now",
-      "what day is it today"
+      "what time is it right now"
     ]
   },
   {
