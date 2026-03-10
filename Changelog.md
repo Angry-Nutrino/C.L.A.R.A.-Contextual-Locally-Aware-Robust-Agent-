@@ -50,3 +50,22 @@ The original approach **mean-pooled** all tool descriptions into a single embedd
 - ~~6-second API wall on Gatekeeper intent classification (Pending local Phi-3 swap).~~ Resolved by MiniLM embedding router.
 - Nvidia Riva ASR integration pending.
 - MiniLM gatekeeper not yet wired into `agent.py` — currently validated in `test.py` only.
+
+## [2026-03-10] Gatekeeper: MiniLM Embedding-Based Tool Routing(Final_Update): Fixes #1
+- Sticking to Max Pooling in Cosine Similarity
+- Observed Drastic improvements in comparison to mean pooling
+
+
+Tier	Threshold	Queries	Examples
+T1: AUTO	> 0.70	15/21	square root (1.00), phone number (1.00), gold price (0.92), news (0.97), cricket (0.84), bitcoin (0.87)
+T2: PHI3	0.40–0.70	3/21	Samsung S25 (0.55), iPhone+% (0.58), 30% of 5000 (0.51)
+T3: GROK	< 0.40	3/21	"hello" (0.25), "tell me a joke" (0.35), "climate change" (0.11)
+
+## [2026-03-10] Gatekeeper: GateKeeper Refractoring(Isolation & Leveraging Phi3:Mini) Fixes #2
+- Dropped The prior Grok gatekeepr's architecture entirely
+- Replaced with MiniLM+Phi3:Mini for faster inference(90% faster inference 700-900ms Over 4-6 Seconds)
+- Boost Tool Calling method: Prior tool call with Phi3 mini inference before The main React Loop
+
+## [2026-03-10] Snall Bugs:
+- Removed Local Asyncio imports causing local variable assumptions conflicts.
+- Fallback tightened.
