@@ -1,6 +1,9 @@
 import re
 import json
 import asyncio
+import torch
+import heapq
+from sentence_transformers import SentenceTransformer
 from langchain_community.llms import Ollama
 from .tools import run_python_code, web_search, get_time_date, consult_archive
 from .memory_manager import free_gpu_memory
@@ -144,8 +147,28 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
         self.db = crud()
         print(f"Initializing Clara with model : {model_name}")
         self.llm =None
+        #pre compute embeddings for tool selection
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        print(f"Loading MiniLM model for gatekeeping on {device}...")
+        self.miniLM= SentenceTransformer('all-MiniLM-L6-v2').to(device)
+        self.tool_emb= self._build_tool_embeddings()
+        self.helper_llm = Ollama(model="phi3:mini", num_ctx=2048, num_gpu=99)
+        self.helper_llm.invoke("hi")  # force cold-start at init so first request has no delay
+        print("Gatekeeper loaded")
         self.load_clara(model_name)
         print("Brain loaded")
+
+    def _build_tool_embeddings(self):
+        with open("core_logic/tool_descriptions.json") as f:
+            tools = json.load(f)
+        self.tool_names = [t["name"] for t in tools]
+        self.tool_meta = {t["name"]: t["description"] for t in tools}
+        embs = []
+        for tool in tools:
+            texts = [tool["description"]] + tool["sub_descriptions"]
+            embs.append(self.miniLM.encode(texts, convert_to_tensor=True))
+        return embs  # List of (N_subs, 384) tensors — ready for max-similarity
+
 
     def load_clara(self, model_name="phi3:mini"):
         try:
@@ -259,7 +282,109 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
         except Exception as e:
             print(f"   [Memory] ⚠️ Consolidation failed: {e}")
 
-    
+    def gatekeeper(self, final_prompt: str) -> dict:
+        # 1. Compute query embedding + cosine similarity against all tool sub_descriptions
+        q_emb = self.miniLM.encode(final_prompt, convert_to_tensor=True)
+        tool_scores = {}
+        for i, embs in enumerate(self.tool_emb):
+            cos_sims = torch.nn.functional.cosine_similarity(q_emb.unsqueeze(0), embs)
+            tool_scores[self.tool_names[i]] = cos_sims.max().item()
+
+        # 2. Top-2 selection via heapq
+        top2 = heapq.nlargest(2, tool_scores.items(), key=lambda x: x[1])
+        tool1_name, tool1_score = top2[0]
+        tool2_name, tool2_score = top2[1] if len(top2) > 1 else ("NONE", 0.0)
+        tool1_micro_desc = self.tool_meta[tool1_name]
+        tool2_micro_desc = self.tool_meta.get(tool2_name, "")
+        print(f">> [Gatekeeper] Top tools: {tool1_name} ({tool1_score:.2f}), {tool2_name} ({tool2_score:.2f})")
+
+        # 3. Build prompt for Phi3
+        gatekeeper_prompt = (
+            f"User Query: '{final_prompt}'\n\n"
+            "Available Tools & Confidence Scores:\n"
+            f"1. {tool1_name} ({tool1_micro_desc}): {tool1_score:.3f}\n"
+            f"2. {tool2_name} ({tool2_micro_desc}): {tool2_score:.3f}\n\n"
+            "ROUTING RULES:\n"
+            "1. High Confidence (Score > 0.70): Select Tool 1. Set intent to TASK.\n"
+            "2. Mid Confidence (Score 0.36 - 0.70): Reason between Tool 1 and Tool 2, select the most relevant. Set intent to TASK.\n"
+            "3. Low Confidence (Score < 0.36): Select NONE. Set intent to CHAT.\n"
+            "4. Context: Output TRUE if the query refers to personal facts, previous tasks, or past conversation. Otherwise FALSE. Default to TRUE if unsure.\n\n"
+            "OUTPUT FORMAT:\n"
+            "You must output ONLY a valid XML block. Do not add any conversational text, explanations, or greetings before or after the XML.\n"
+            "<analysis>\n"
+            "  <tool>Selected tool name or NONE</tool>\n"
+            "  <tool_query>The specific search query or instruction for the tool. Empty if NONE.</tool_query>\n"
+            "  <intent>TASK or CHAT</intent>\n"
+            "  <context_needed>TRUE or FALSE</context_needed>\n"
+            "</analysis>"
+        )
+
+        # 4. Invoke Phi3 mini
+        print(">> [Gatekeeper] Asking Phi3 for routing decision...")
+
+        # 5. Parse XML — safe defaults on failure
+        tool_name = "NONE"
+        tool_query = ""
+        intent = "CHAT"
+        need_context = True
+
+        try:
+            raw_response = self.helper_llm.invoke(gatekeeper_prompt)
+            print(f">> [Gatekeeper] Raw: {raw_response[:120]}...")
+
+            match = re.search(r"<analysis>.*?</analysis>", raw_response, re.DOTALL)
+            if match:
+                xml = match.group(0)
+                t_match  = re.search(r"<tool>(.*?)</tool>", xml)
+                tq_match = re.search(r"<tool_query>(.*?)</tool_query>", xml)
+                i_match  = re.search(r"<intent>(.*?)</intent>", xml)
+                c_match  = re.search(r"<context_needed>(.*?)</context_needed>", xml)
+                tool_name    = t_match.group(1).strip()  if t_match  else "NONE"
+                tool_query   = tq_match.group(1).strip() if tq_match else ""
+                intent       = i_match.group(1).strip()  if i_match  else "TASK"
+                need_context = c_match.group(1).strip() == "TRUE" if c_match else True
+            else:
+                print(">> [Gatekeeper] ⚠️ No XML found. Using safe defaults.")
+        except Exception as e:
+            print(f">> [Gatekeeper] ⚠️ Phi3 failed ({e}). Using safe defaults (TASK / no boost).")
+            intent = "TASK"  # assume TASK so Grok at least tries rather than chatting blindly
+
+        print(f">> [Gatekeeper] Intent: {intent} | Tool: {tool_name} | Context: {need_context}")
+
+        # 6. Prime self.llm — system prompt, optional memory, user request
+        self.llm.append(system(self.system_prompt))
+        if need_context:
+            print(">> [Memory] Loading Soul from disk...")
+            mem_context = self.db.get_full_context()
+            self.llm.append(assistant(f"PREVIOUS MEMORY:\n{mem_context}"))
+        self.llm.append(user(f"Now, execute this request: {final_prompt}"))
+
+        # 7. Boost — pre-execute first tool and inject observation into Grok's context
+        if tool_name != "NONE" and tool_query and tool_name != "vision_tool":
+            print(f">> [Gatekeeper] Boosting with: {tool_name}[{tool_query}]")
+            first_observation = "Error: Tool failed."
+            try:
+                if tool_name == "python_repl":
+                    first_observation = run_python_code(tool_query)
+                elif tool_name == "web_search":
+                    res = web_search(tool_query)
+                    first_observation = res.get("answer", "No results found.")
+                elif tool_name == "date_time":
+                    first_observation = get_time_date()
+                elif tool_name == "consult_archive":
+                    first_observation = consult_archive(tool_query)
+            except Exception as e:
+                first_observation = f"Tool error: {e}"
+            print(f">> [Gatekeeper] Boost observation: {str(first_observation)[:100]}...")
+            self.llm.append(assistant(
+                f"Thought: Based on the request, I should use {tool_name} first.\n"
+                f"Action: {tool_name}[{tool_query}]"
+            ))
+            self.llm.append(user(f"Observation got from {tool_name}: {first_observation}"))
+
+        return {"intent": intent, "need_context": need_context, "tool": tool_name, "tool_query": tool_query}
+
+
 
     async def process_request(self, query, image_data=None, on_step_update=None):
         # query = input("Enter your mission for CLARA: ")
@@ -287,39 +412,9 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
                     print(f"   ❌ Failed to save image: {e}")
             # Added basic formatting to history
             # self.chat_history = self.system_prompt + f"\nUser: {query}\n"
-            self.llm.append(system(self.system_prompt))
-            gatekeeper_prompt = (
-                        f"User Query: '{final_prompt}'\n"
-                        "Analyze this request properly, if it is a TASK or CHAT:\n"
-                        "Hint 1: A multi step chat is also a TASK, a single question is CHAT.\n"
-                        "Hint 2: if a tool is needed to answer the question, it is a TASK.\n"
-                        "Output an XML block like the format given below:\n"
-                        "<analysis>\n"
-                        "  <intent>TASK or CHAT</intent>\n"
-                        "  <context_needed>TRUE or FALSE</context_needed>\n"
-                        "</analysis>"
-                    )
-            self.llm.append(user(gatekeeper_prompt))
-                    
-            print(">> [Brain] Analyzing Intent...")
-            gate_response = self.llm.sample().content
-            self.llm.append(assistant(gate_response))
-            self.llm.append(assistant("End of analysis."))
-                    
-            intent = "TASK" if "<intent>TASK</intent>" in gate_response else "CHAT"
-            need_context = "<context_needed>TRUE</context_needed>" in gate_response
-                    
-            print(f">> [Gatekeeper] Intent: {intent} | Memory Needed: {need_context}")
+            routing = self.gatekeeper(final_prompt)
+            intent = routing["intent"]
 
-            # 4. LAZY LOAD CONTEXT (Using CRUD)
-            if need_context:
-                print(">> [Memory] Loading Soul from disk...")
-                # <--- NEW: Use CRUD to fetch formatted context
-                mem_context = await self.db.get_full_context()
-                self.llm.append(assistant(f"PREVIOUS MEMORY:\n{mem_context}"))
-            
-            # 5. EXECUTE
-            self.llm.append(user(f"Now, execute this request: {final_prompt}"))
 
             if intent == "TASK":
                 final_answer = await self.run_task(on_step_update=on_step_update)
@@ -336,6 +431,7 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
                 if str(m.role) not in ['3', 'system']
             ])
             asyncio.create_task(asyncio.to_thread(self.memorize_episode, chat_snapshot))
+            # Re-intializing Clara's brain to clear the context from the brain
             self.llm = self.client.chat.create(model="grok-4-1-fast-reasoning")
 
             return final_answer
@@ -344,7 +440,6 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
         """
         Main Loop: Now Powered by Ears 👂 (Async Wrapper Version)
         """
-        import asyncio  # Import locally to avoid global clutter
         # --- MODE A: DIRECT INPUT (Used by API/CLI arguments) ---
         if direct_input:
             final_prompt = direct_input
@@ -474,7 +569,6 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
                     answer_sent_len += len(new_chars)
 
         # 2. Stream Complete. Clean up.
-        import asyncio
         await asyncio.sleep(0.05) 
         
         response_text = raw_content.strip()
@@ -532,7 +626,6 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
                     if current_thought and on_step_update:
                         await on_step_update(clean_thought, type="thought", turn_id=turn_count)
             
-            import asyncio
             await asyncio.sleep(0.05)  # Small delay to simulate thinking time and allow UI to update
 
             if "Observation:" in raw_content:

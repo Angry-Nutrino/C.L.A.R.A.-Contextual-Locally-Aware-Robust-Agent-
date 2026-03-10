@@ -3,6 +3,7 @@
 .env.local
 interface/.env
 api_keys.txt
+.claude/
 
 # --- PYTHON ---
 __pycache__/
@@ -50,3 +51,4 @@ output.wav
 jarvis_v2/
 .DS_Store
 Thumbs.db
+style.md

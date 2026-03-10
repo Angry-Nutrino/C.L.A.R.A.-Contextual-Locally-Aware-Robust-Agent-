@@ -1,0 +1,54 @@
+[
+  {
+    "name": "web_search",
+    "description": "find prices news and information on the internet",
+    "sub_descriptions": [
+      "what is the price of gold",
+      "stock price of Apple AAPL or Samsung",
+      "latest news about OpenAI or any topic",
+      "what is bitcoin trading at",
+      "who won the cricket match or game"
+    ]
+  },
+  {
+    "name": "python_repl",
+    "description": "calculate math and run code",
+    "sub_descriptions": [
+      "calculate the square root of 1445",
+      "convert 45 USD to INR",
+      "plot a bar chart of numbers",
+      "what is 25 percent of 89000",
+      "solve math equation"
+    ]
+  },
+  {
+    "name": "consult_archive",
+    "description": "look up resume CV and knowledge base",
+    "sub_descriptions": [
+      "find the phone number in my resume",
+      "what skills are listed in my CV",
+      "look up project details from the knowledge base",
+      "retrieve contact details from documents",
+      "search archived records"
+    ]
+  },
+  {
+    "name": "date_time",
+    "description": "get current date and time right now",
+    "sub_descriptions": [
+      "what is today's date and time",
+      "what time is it right now"
+    ]
+  },
+  {
+    "name": "vision_tool",
+    "description": "analyze uploaded image or picture",
+    "sub_descriptions": [
+      "analyze the image I just uploaded",
+      "what is in this picture",
+      "describe the contents of this photo",
+      "identify objects in this image",
+      "tell me what you see in this screenshot"
+    ]
+  }
+]
