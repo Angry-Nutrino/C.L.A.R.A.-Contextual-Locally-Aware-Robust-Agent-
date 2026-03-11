@@ -4,7 +4,7 @@ import asyncio
 import torch
 import heapq
 from sentence_transformers import SentenceTransformer
-from langchain_community.llms import Ollama
+import ollama as ollama_client
 from .tools import run_python_code, web_search, get_time_date, consult_archive
 from .memory_manager import free_gpu_memory
 # from .ears import listen_local
@@ -152,8 +152,8 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
         print(f"Loading MiniLM model for gatekeeping on {device}...")
         self.miniLM= SentenceTransformer('all-MiniLM-L6-v2').to(device)
         self.tool_emb= self._build_tool_embeddings()
-        self.helper_llm = Ollama(model="phi3:mini", num_ctx=2048, num_gpu=99)
-        self.helper_llm.invoke("hi")  # force cold-start at init so first request has no delay
+        self.phi3_model = "phi3:mini"
+        ollama_client.chat(model=self.phi3_model, messages=[{"role": "user", "content": "hi"}])  # cold-start
         print("Gatekeeper loaded")
         self.load_clara(model_name)
         print("Brain loaded")
@@ -282,107 +282,122 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
         except Exception as e:
             print(f"   [Memory] ⚠️ Consolidation failed: {e}")
 
-    def gatekeeper(self, final_prompt: str) -> dict:
-        # 1. Compute query embedding + cosine similarity against all tool sub_descriptions
-        q_emb = self.miniLM.encode(final_prompt, convert_to_tensor=True)
-        tool_scores = {}
-        for i, embs in enumerate(self.tool_emb):
-            cos_sims = torch.nn.functional.cosine_similarity(q_emb.unsqueeze(0), embs)
-            tool_scores[self.tool_names[i]] = cos_sims.max().item()
+        def gatekeeper(self, final_prompt: str) -> dict:
+            # 1. Compute query embedding + cosine similarity against all tool sub_descriptions
+            q_emb = self.miniLM.encode(final_prompt, convert_to_tensor=True)
+            tool_scores = {}
+            for i, embs in enumerate(self.tool_emb):
+                cos_sims = torch.nn.functional.cosine_similarity(q_emb.unsqueeze(0), embs)
+                tool_scores[self.tool_names[i]] = cos_sims.max().item()
 
-        # 2. Top-2 selection via heapq
-        top2 = heapq.nlargest(2, tool_scores.items(), key=lambda x: x[1])
-        tool1_name, tool1_score = top2[0]
-        tool2_name, tool2_score = top2[1] if len(top2) > 1 else ("NONE", 0.0)
-        tool1_micro_desc = self.tool_meta[tool1_name]
-        tool2_micro_desc = self.tool_meta.get(tool2_name, "")
-        print(f">> [Gatekeeper] Top tools: {tool1_name} ({tool1_score:.2f}), {tool2_name} ({tool2_score:.2f})")
+            # 2. Top-2 selection via heapq
+            top2 = heapq.nlargest(2, tool_scores.items(), key=lambda x: x[1])
+            tool1_name, tool1_score = top2[0]
+            tool2_name, tool2_score = top2[1] if len(top2) > 1 else ("NONE", 0.0)
+            tool1_micro_desc = self.tool_meta[tool1_name]
+            tool2_micro_desc = self.tool_meta.get(tool2_name, "")
+            print(f">> [Gatekeeper] Top tools: {tool1_name} ({tool1_score:.2f}), {tool2_name} ({tool2_score:.2f})")
 
-        # 3. Build prompt for Phi3
-        gatekeeper_prompt = (
-            f"User Query: '{final_prompt}'\n\n"
-            "Available Tools & Confidence Scores:\n"
-            f"1. {tool1_name} ({tool1_micro_desc}): {tool1_score:.3f}\n"
-            f"2. {tool2_name} ({tool2_micro_desc}): {tool2_score:.3f}\n\n"
-            "ROUTING RULES:\n"
-            "1. High Confidence (Score > 0.70): Select Tool 1. Set intent to TASK.\n"
-            "2. Mid Confidence (Score 0.36 - 0.70): Reason between Tool 1 and Tool 2, select the most relevant. Set intent to TASK.\n"
-            "3. Low Confidence (Score < 0.36): Select NONE. Set intent to CHAT.\n"
-            "4. Context: Output TRUE if the query refers to personal facts, previous tasks, or past conversation. Otherwise FALSE. Default to TRUE if unsure.\n\n"
-            "OUTPUT FORMAT:\n"
-            "You must output ONLY a valid XML block. Do not add any conversational text, explanations, or greetings before or after the XML.\n"
-            "<analysis>\n"
-            "  <tool>Selected tool name or NONE</tool>\n"
-            "  <tool_query>The specific search query or instruction for the tool. Empty if NONE.</tool_query>\n"
-            "  <intent>TASK or CHAT</intent>\n"
-            "  <context_needed>TRUE or FALSE</context_needed>\n"
-            "</analysis>"
-        )
+            # 3. Build prompt for Phi3
+            gatekeeper_prompt = (
+                f"User Query: '{final_prompt}'\n\n"
+                "Available Tools & Confidence Scores:\n"
+                f"1. {tool1_name} ({tool1_micro_desc}): {tool1_score:.3f}\n"
+                f"2. {tool2_name} ({tool2_micro_desc}): {tool2_score:.3f}\n\n"
+                "ROUTING RULES:\n"
+                "1. High Confidence (Score > 0.70): Select Tool 1. Set intent to TASK.\n"
+                "2. Mid Confidence (Score 0.36 - 0.70): Select the most relevant tool. Set intent to TASK.\n"
+                "3. Low Confidence (Score < 0.36): You MUST select NONE and set intent to CHAT. Do not select any tool.\n"
+                "4. context_needed: TRUE if the query refers to personal facts, previous tasks, or past conversation. Otherwise FALSE.\n\n"
+                "TOOL QUERY RULES:\n"
+                "- tool_query MUST contain a specific query string when a tool is selected.\n"
+                "- For python_repl: tool_query is the exact code or math expression to evaluate.\n"
+                "- For web_search: tool_query is the specific search string.\n"
+                "- For date_time: tool_query is 'now'.\n"
+                "- For vision_tool or consult_archive: tool_query is the specific question.\n"
+                "- For NONE: tool_query is empty.\n\n"
+                "OUTPUT FORMAT:\n"
+                "Output ONLY the XML block below:\n"
+                "<analysis>\n"
+                "  <tool>Selected tool name or NONE</tool>\n"
+                "  <tool_query>Specific query for the tool. Empty only if NONE.</tool_query>\n"
+                "  <intent>TASK or CHAT</intent>\n"
+                "  <context_needed>TRUE or FALSE</context_needed>\n"
+                "</analysis>"
+            )
 
-        # 4. Invoke Phi3 mini
-        print(">> [Gatekeeper] Asking Phi3 for routing decision...")
+            # 4. Invoke Phi3 mini via ollama chat API (stop sequence prevents runaway generation)
+            print(">> [Gatekeeper] Asking Phi3 for routing decision...")
 
-        # 5. Parse XML — safe defaults on failure
-        tool_name = "NONE"
-        tool_query = ""
-        intent = "CHAT"
-        need_context = True
+            # 5. Parse XML — safe defaults on failure
+            tool_name = "NONE"
+            tool_query = ""
+            intent = "CHAT"
+            need_context = True
 
-        try:
-            raw_response = self.helper_llm.invoke(gatekeeper_prompt)
-            print(f">> [Gatekeeper] Raw: {raw_response[:120]}...")
-
-            match = re.search(r"<analysis>.*?</analysis>", raw_response, re.DOTALL)
-            if match:
-                xml = match.group(0)
-                t_match  = re.search(r"<tool>(.*?)</tool>", xml)
-                tq_match = re.search(r"<tool_query>(.*?)</tool_query>", xml)
-                i_match  = re.search(r"<intent>(.*?)</intent>", xml)
-                c_match  = re.search(r"<context_needed>(.*?)</context_needed>", xml)
-                tool_name    = t_match.group(1).strip()  if t_match  else "NONE"
-                tool_query   = tq_match.group(1).strip() if tq_match else ""
-                intent       = i_match.group(1).strip()  if i_match  else "TASK"
-                need_context = c_match.group(1).strip() == "TRUE" if c_match else True
-            else:
-                print(">> [Gatekeeper] ⚠️ No XML found. Using safe defaults.")
-        except Exception as e:
-            print(f">> [Gatekeeper] ⚠️ Phi3 failed ({e}). Using safe defaults (TASK / no boost).")
-            intent = "TASK"  # assume TASK so Grok at least tries rather than chatting blindly
-
-        print(f">> [Gatekeeper] Intent: {intent} | Tool: {tool_name} | Context: {need_context}")
-
-        # 6. Prime self.llm — system prompt, optional memory, user request
-        self.llm.append(system(self.system_prompt))
-        if need_context:
-            print(">> [Memory] Loading Soul from disk...")
-            mem_context = self.db.get_full_context()
-            self.llm.append(assistant(f"PREVIOUS MEMORY:\n{mem_context}"))
-        self.llm.append(user(f"Now, execute this request: {final_prompt}"))
-
-        # 7. Boost — pre-execute first tool and inject observation into Grok's context
-        if tool_name != "NONE" and tool_query and tool_name != "vision_tool":
-            print(f">> [Gatekeeper] Boosting with: {tool_name}[{tool_query}]")
-            first_observation = "Error: Tool failed."
             try:
-                if tool_name == "python_repl":
-                    first_observation = run_python_code(tool_query)
-                elif tool_name == "web_search":
-                    res = web_search(tool_query)
-                    first_observation = res.get("answer", "No results found.")
-                elif tool_name == "date_time":
-                    first_observation = get_time_date()
-                elif tool_name == "consult_archive":
-                    first_observation = consult_archive(tool_query)
-            except Exception as e:
-                first_observation = f"Tool error: {e}"
-            print(f">> [Gatekeeper] Boost observation: {str(first_observation)[:100]}...")
-            self.llm.append(assistant(
-                f"Thought: Based on the request, I should use {tool_name} first.\n"
-                f"Action: {tool_name}[{tool_query}]"
-            ))
-            self.llm.append(user(f"Observation got from {tool_name}: {first_observation}"))
+                response = ollama_client.chat(
+                    model=self.phi3_model,
+                    messages=[
+                        {"role": "system", "content": "You are an XML routing assistant. Output ONLY the XML block. No code fences, no explanations, no extra text."},
+                        {"role": "user", "content": gatekeeper_prompt},
+                    ],
+                    options={"temperature": 0, "num_ctx": 2048, "stop": ["</analysis>"]},
+                )
+                raw_response = response["message"]["content"] + "</analysis>"
+                print(f">> [Gatekeeper] Raw: {raw_response[:120]}...")
 
-        return {"intent": intent, "need_context": need_context, "tool": tool_name, "tool_query": tool_query}
+                match = re.search(r"<analysis>.*?</analysis>", raw_response, re.DOTALL)
+                if match:
+                    xml = match.group(0)
+                    t_match  = re.search(r"<tool>(.*?)</tool>", xml)
+                    tq_match = re.search(r"<tool_query>(.*?)</tool_query>", xml)
+                    i_match  = re.search(r"<intent>(.*?)</intent>", xml)
+                    c_match  = re.search(r"<context_needed>(TRUE|FALSE)", xml)
+                    tool_name    = t_match.group(1).strip()  if t_match  else "NONE"
+                    tool_query   = tq_match.group(1).strip() if tq_match else ""
+                    intent       = i_match.group(1).strip()  if i_match  else "TASK"
+                    need_context = c_match.group(1).strip() == "TRUE" if c_match else True
+                else:
+                    print(">> [Gatekeeper] ⚠️ No XML found. Using safe defaults.")
+            except Exception as e:
+                print(f">> [Gatekeeper] ⚠️ Phi3 failed ({e}). Using safe defaults (TASK / no boost).")
+                intent = "TASK"  # assume TASK so Grok at least tries rather than chatting blindly
+
+            print(f">> [Gatekeeper] Intent: {intent} | Tool: {tool_name} | Context: {need_context}")
+
+            # 6. Prime self.llm — system prompt, optional memory, user request
+            self.llm.append(system(self.system_prompt))
+            if need_context:
+                print(">> [Memory] Loading Soul from disk...")
+                mem_context = self.db.get_full_context()
+                self.llm.append(assistant(f"PREVIOUS MEMORY:\n{mem_context}"))
+            self.llm.append(user(f"Now, execute this request: {final_prompt}"))
+
+            # 7. Boost — pre-execute first tool and inject observation into Grok's context
+            if tool_name != "NONE" and tool_query and tool_name != "vision_tool":
+                print(f">> [Gatekeeper] Boosting with: {tool_name}[{tool_query}]")
+                first_observation = "Error: Tool failed."
+                try:
+                    if tool_name == "python_repl":
+                        first_observation = run_python_code(tool_query)
+                    elif tool_name == "web_search":
+                        res = web_search(tool_query)
+                        first_observation = res.get("answer", "No results found.")
+                    elif tool_name == "date_time":
+                        first_observation = get_time_date()
+                    elif tool_name == "consult_archive":
+                        first_observation = consult_archive(tool_query)
+                except Exception as e:
+                    first_observation = f"Tool error: {e}"
+                print(f">> [Gatekeeper] Boost observation: {str(first_observation)[:100]}...")
+                self.llm.append(assistant(
+                    f"Thought: Based on the request, I should use {tool_name} first.\n"
+                    f"Action: {tool_name}[{tool_query}]"
+                ))
+                self.llm.append(user(f"Observation got from {tool_name}: {first_observation}"))
+
+            return {"intent": intent, "need_context": need_context, "tool": tool_name, "tool_query": tool_query}
 
 
 
