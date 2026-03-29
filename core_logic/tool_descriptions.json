@@ -7,7 +7,24 @@
       "stock price of Apple AAPL or Samsung",
       "latest news about OpenAI or any topic",
       "what is bitcoin trading at",
-      "who won the cricket match or game"
+      "who won the cricket match or game",
+      "how is the stock market index performing today",
+      "what is the Sensex or Nifty at right now",
+      "is something banned or illegal in India or any country",
+      "is something allowed or prohibited by law",
+      "find me if something is legal or restricted",
+      "can you look up whether something is permitted",
+      "search for facts about a law policy or regulation",
+      "what does the law say about this topic",
+      "look up current information about a real world topic",
+      "find out the status of something in the real world",
+      "is something true or false in reality right now",
+      "search the internet for information about this",
+      "find recent information or facts about a topic",
+      "look up what is happening with something",
+      "who is the current prime minister president or leader of a country",
+      "what is the population of a country or city",
+      "how does something work in real life currently"
     ]
   },
   {
@@ -18,18 +35,34 @@
       "convert 45 USD to INR",
       "plot a bar chart of numbers",
       "what is 25 percent of 89000",
-      "solve math equation"
+      "solve math equation",
+      "write Python code to do something",
+      "run a script to process data",
+      "sort this list using code",
+      "count words in a string with a script",
+      "what is 2 plus 2",
+      "write code to reverse a string",
+      "run some math for me",
+      "show me how to calculate body mass index",
+      "calculate BMI using a formula",
+      "calculate compound interest on a principal at a rate",
+      "figure out interest earned over time mathematically"
     ]
   },
   {
     "name": "consult_archive",
-    "description": "look up resume CV and knowledge base",
+    "description": "look up resume CV and knowledge base documents",
     "sub_descriptions": [
       "find the phone number in my resume",
       "what skills are listed in my CV",
       "look up project details from the knowledge base",
       "retrieve contact details from documents",
-      "search archived records"
+      "search archived records",
+      "pull up my resume and tell me what languages I know",
+      "check my CV for programming languages listed",
+      "what does my resume say about my skills",
+      "look up what I said in previous notes",
+      "check the archive for what I previously mentioned"
     ]
   },
   {
@@ -37,18 +70,55 @@
     "description": "get current date and time right now",
     "sub_descriptions": [
       "what is today's date and time",
-      "what time is it right now"
+      "what time is it right now",
+      "what is the current clock time",
+      "tell me the exact date today",
+      "what day of the week is it today"
     ]
   },
   {
     "name": "vision_tool",
-    "description": "analyze uploaded image or picture",
+    "description": "analyze an uploaded photo or image file",
     "sub_descriptions": [
       "analyze the image I just uploaded",
       "what is in this picture",
       "describe the contents of this photo",
       "identify objects in this image",
-      "tell me what you see in this screenshot"
+      "tell me what you see in this screenshot",
+      "look at this image I shared with you",
+      "here is an image can you describe it",
+      "I uploaded an image tell me what you see",
+      "look at what I sent you visually",
+      "I uploaded an image of a document what does it say",
+      "look at this picture of my resume and tell me what skills are shown"
+    ]
+  },
+  {
+    "name": "NONE",
+    "description": "general conversation chat opinion greeting or explanation requiring no tool",
+    "sub_descriptions": [
+      "hello how are you doing today",
+      "what do you think about this idea",
+      "tell me a joke",
+      "just talk to me",
+      "what is your opinion on artificial intelligence",
+      "I wanted to say thank you",
+      "you did a great job earlier",
+      "that is interesting tell me more",
+      "nice work on that",
+      "I disagree with that approach",
+      "what are your thoughts on this",
+      "explain this to me simply",
+      "can you help me understand something",
+      "what do you think my height might be",
+      "philosophically speaking what does this mean",
+      "tell me a joke about programming or a language",
+      "what would happen if I thought about code without running it",
+      "imagine hypothetically what code would do mentally",
+      "do you remember what I told you before",
+      "do you remember our previous conversation",
+      "what did you suggest previously in our chat",
+      "look within yourself for the answer"
     ]
   }
 ]

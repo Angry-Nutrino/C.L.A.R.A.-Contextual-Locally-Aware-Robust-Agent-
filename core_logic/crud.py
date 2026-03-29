@@ -69,6 +69,59 @@ class crud:
         context += "--------------------------------"
         return context
 
+    def get_smart_context(self, query: str, miniLM, episodic_embeddings: list) -> str:
+        """
+        Smart retrieval: last 3 episodic entries + top 2 semantic hits.
+        Vault always included. Deduplicates overlaps.
+        """
+        import torch
+
+        profile   = self.memory.get("user_profile", {})
+        project   = self.memory.get("project_state", {})
+        long_term = self.memory.get("long_term", [])
+        episodes  = self.memory.get("episodic_log", [])
+
+        selected_indices = set()
+
+        # 1. Last 3 by recency
+        if episodes:
+            last3 = list(range(max(0, len(episodes) - 3), len(episodes)))
+            for idx in last3:
+                selected_indices.add(idx)
+
+        # 2. Top 2 semantic hits via MiniLM
+        if episodes and episodic_embeddings and len(episodic_embeddings) == len(episodes):
+            q_emb  = miniLM.encode(query, convert_to_tensor=True)
+            all_embs = torch.stack(episodic_embeddings)  # (N, 384)
+            cos_sims = torch.nn.functional.cosine_similarity(q_emb.unsqueeze(0), all_embs)
+            top2_indices = cos_sims.topk(min(2, len(episodes))).indices.tolist()
+            for idx in top2_indices:
+                selected_indices.add(idx)
+
+        # 3. Build context string
+        context = "--- MEMORY CONTEXT ---\n"
+
+        # Identity
+        context += f"USER: {profile.get('name', 'Unknown')} | ROLE: {profile.get('role', 'User')}\n"
+        context += f"TECH STACK: {', '.join(profile.get('preferences', {}).get('tools', []))}\n"
+        context += f"CURRENT PHASE: {project.get('current_phase', 'Unknown')}\n"
+
+        # Vault
+        if long_term:
+            context += "\n[PERMANENT KNOWLEDGE VAULT]:\n"
+            for fact in long_term:
+                context += f"- {fact}\n"
+
+        # Selected episodic entries (sorted chronologically)
+        if selected_indices:
+            context += "\n[RELEVANT PAST INTERACTIONS]:\n"
+            for idx in sorted(selected_indices):
+                ep = episodes[idx]
+                context += f"- [{ep.get('timestamp', '')[:16]}] {ep.get('summary', '')}\n"
+
+        context += "----------------------"
+        return context
+
     def add_episodic_log(self, summary):
         """
         Always saves the summary of the last interaction.
