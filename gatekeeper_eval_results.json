@@ -1,137 +1,167 @@
 [
   {
     "iteration": 1,
-    "timestamp": "2026-03-11T23:17:21.287168",
-    "pass_count": 20,
-    "total": 20,
+    "timestamp": "2026-03-25T13:48:09.021508",
+    "pass_count": 60,
+    "total": 60,
     "pass_rate": 1.0,
     "results": [
       {
         "query_id": 0,
         "query": "What is the current price of Bitcoin?",
-        "raw_output": "<analysis>\n  <tool>web_search</tool>\n  <tool_query>current price of bitcoin</tool_query>\n  <intent>TASK</intent>\n  <context_needed>FALSE</context_needed>\n</analysis>",
+        "expected_tool": "web_search",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>web_search</tool>\n  <tool_query>current price of Bitcoin</tool_query>\n  <intent>TASK</intent>\n</analysis>",
         "parsed": {
           "tool": "web_search",
-          "tool_query": "current price of bitcoin",
-          "intent": "TASK",
-          "context_needed": false
+          "tool_query": "current price of Bitcoin",
+          "intent": "TASK"
         },
         "passed": true,
         "failure_reason": null
       },
       {
         "query_id": 1,
-        "query": "Search for the latest AI news.",
-        "raw_output": "<analysis>\n  <tool>web_search</tool>\n  <tool_query>latest AI news</tool_query>\n  <intent>TASK</intent>\n  <context_needed>FALSE</context_needed>\n</analysis>",
+        "query": "Search for the latest AI news today.",
+        "expected_tool": "web_search",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>web_search</tool>\n  <tool_query>latest AI news today</tool_query>\n  <intent>TASK</intent>\n</analysis>",
         "parsed": {
           "tool": "web_search",
-          "tool_query": "latest AI news",
-          "intent": "TASK",
-          "context_needed": false
+          "tool_query": "latest AI news today",
+          "intent": "TASK"
         },
         "passed": true,
         "failure_reason": null
       },
       {
         "query_id": 2,
-        "query": "Search for RTX 4090 price in India.",
-        "raw_output": "<analysis>\n  <tool>web_search</tool>\n  <tool_query>RTX 4090 price in India'</tool_query>\n  <intent>TASK</intent>\n  <context_needed>FALSE</context_needed>\n</analysis>",
+        "query": "What is the stock price of Tesla right now?",
+        "expected_tool": "web_search",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>web_search</tool>\n  <tool_query>current stock price of Tesla</tool_query>\n  <intent>TASK</intent>\n</analysis>",
         "parsed": {
           "tool": "web_search",
-          "tool_query": "RTX 4090 price in India'",
-          "intent": "TASK",
-          "context_needed": false
+          "tool_query": "current stock price of Tesla",
+          "intent": "TASK"
         },
         "passed": true,
         "failure_reason": null
       },
       {
         "query_id": 3,
-        "query": "What's the latest news about GPT-5?",
-        "raw_output": "```xml\n<analysis>\n  <tool>web_search</tool>\n  <tool_query>latest news about GPT-5</tool_query>\n  <intent>TASK</intent>\n  <context_needed>FALSE</context_needed>\n</analysis>",
+        "query": "Who won the IPL match yesterday?",
+        "expected_tool": "web_search",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>web_search</tool>\n  <tool_query>Who won yesterday's IPL match?</tool_query>\n  <intent>TASK</intent>\n</analysis>",
         "parsed": {
           "tool": "web_search",
-          "tool_query": "latest news about GPT-5",
-          "intent": "TASK",
-          "context_needed": false
+          "tool_query": "Who won yesterday's IPL match?",
+          "intent": "TASK"
         },
         "passed": true,
         "failure_reason": null
       },
       {
         "query_id": 4,
-        "query": "Find me the weather in Mumbai today.",
-        "raw_output": "```xml\n<analysis>\n  <tool>web_search</tool>\n  <tool_query>Find weather in Mumbai today</tool_query>\n  <intent>TASK</intent>\n  <context_needed>FALSE</context_needed>\n</analysis>",
+        "query": "Find the latest news about GPT-5.",
+        "expected_tool": "web_search",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>web_search</tool>\n  <tool_query>Find latest news about GPT-5</tool_query>\n  <intent>TASK</intent>\n</analysis>",
         "parsed": {
           "tool": "web_search",
-          "tool_query": "Find weather in Mumbai today",
-          "intent": "TASK",
-          "context_needed": false
+          "tool_query": "Find latest news about GPT-5",
+          "intent": "TASK"
         },
         "passed": true,
         "failure_reason": null
       },
       {
         "query_id": 5,
-        "query": "Calculate the compound interest on 50000 at 8% for 5 years.",
-        "raw_output": "<analysis>\n  <tool>python_repl</tool>\n  <tool_query>import math; principal = 50000; rate = 0.08; time = 5; compound_interest = round(principal * (math.pow((1 + rate / 12), time) - 1), 2); print(\"Compound Interest:\", compound_interest)</tool_query>\n  <intent>TASK</intent>\n  <context_needed>FALSE</context_needed>\n</analysis>",
+        "query": "Calculate the square root of 1764.",
+        "expected_tool": "python_repl",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>python_repl</tool>\n  <tool_query>import math; print(math.sqrt(1764))</tool_query>\n  <intent>TASK</intent>\n</analysis>",
         "parsed": {
           "tool": "python_repl",
-          "tool_query": "import math; principal = 50000; rate = 0.08; time = 5; compound_interest = round(principal * (math.pow((1 + rate / 12), time) - 1), 2); print(\"Compound Interest:\", compound_interest)",
-          "intent": "TASK",
-          "context_needed": false
+          "tool_query": "import math; print(math.sqrt(1764))",
+          "intent": "TASK"
         },
         "passed": true,
         "failure_reason": null
       },
       {
         "query_id": 6,
-        "query": "Write Python code to reverse a string.",
-        "raw_output": "<analysis>\n  <tool>python_repl</tool>\n  <tool_query><code>def reverse_string(s): return s[::-1] print(reverse_string('hello'))</code></tool_query>\n  <intent>TASK</intent>\n  <context_needed>FALSE</context_needed>\n</analysis>",
+        "query": "What is 18 percent of 75000?",
+        "expected_tool": "python_repl",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>python_repl</tool>\n  <tool_query>'18/100*75000'</tool_query>\n  <intent>TASK</intent>\n</analysis>",
         "parsed": {
           "tool": "python_repl",
-          "tool_query": "<code>def reverse_string(s): return s[::-1] print(reverse_string('hello'))</code>",
-          "intent": "TASK",
-          "context_needed": false
+          "tool_query": "'18/100*75000'",
+          "intent": "TASK"
         },
         "passed": true,
         "failure_reason": null
       },
       {
         "query_id": 7,
-        "query": "Run a Python script to sort this list: [3,1,4,1,5,9].",
-        "raw_output": "<analysis>\n  <tool>python_repl</tool>\n  <tool_query>sort([3,1,4,1,5,9])</tool_query>\n  <intent>TASK</intent>\n  <context_needed>FALSE</context_needed>\n</analysis>",
+        "query": "Convert 200 USD to INR.",
+        "expected_tool": "python_repl",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>python_repl</tool>\n  <tool_query>import Forex; print(Forex.convert(200, 'USD', 'INR'))</tool_query>\n  <intent>TASK</intent>\n</analysis>",
         "parsed": {
           "tool": "python_repl",
-          "tool_query": "sort([3,1,4,1,5,9])",
-          "intent": "TASK",
-          "context_needed": false
+          "tool_query": "import Forex; print(Forex.convert(200, 'USD', 'INR'))",
+          "intent": "TASK"
         },
         "passed": true,
         "failure_reason": null
       },
       {
         "query_id": 8,
-        "query": "What is 2 + 2?",
-        "raw_output": "```xml\n<analysis>\n  <tool>python_repl</tool>\n  <tool_query>2 + 2</tool_query>\n  <intent>TASK</intent>\n  <context_needed>FALSE</context_needed>\n</analysis>",
+        "query": "Write Python code to reverse a string.",
+        "expected_tool": "python_repl",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>python_repl</tool>\n  <tool_query>'print(\"'.join(user_input[::-1]) + \"'\")'</tool_query>\n  <intent>TASK</intent>\n</analysis>",
         "parsed": {
           "tool": "python_repl",
-          "tool_query": "2 + 2",
-          "intent": "TASK",
-          "context_needed": false
+          "tool_query": "'print(\"'.join(user_input[::-1]) + \"'\")'",
+          "intent": "TASK"
         },
         "passed": true,
         "failure_reason": null
       },
       {
         "query_id": 9,
-        "query": "Convert 100 USD to INR using current rates.",
-        "raw_output": "<analysis>\n  <tool>python_repl</tool>\n  <tool_query>Convert 100 USD to INR using current rates.</tool_query>\n  <intent>TASK</intent>\n  <context_needed>FALSE</context end of document.</analysis>",
+        "query": "What is 345 multiplied by 78?",
+        "expected_tool": "python_repl",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>python_repl</tool>\n  <tool_query>345*78</tool_query>\n  <intent>TASK</intent>\n</analysis>",
         "parsed": {
           "tool": "python_repl",
-          "tool_query": "Convert 100 USD to INR using current rates.",
-          "intent": "TASK",
-          "context_needed": false
+          "tool_query": "345*78",
+          "intent": "TASK"
         },
         "passed": true,
         "failure_reason": null
@@ -139,12 +169,15 @@
       {
         "query_id": 10,
         "query": "What time is it right now?",
-        "raw_output": "```xml\n<analysis>\n  <tool>date_time</tool>\n  <tool_query>now</tool_query>\n  <intent>TASK</intent>\n  <context_needed>FALSE</context_needed>\n</analysis>",
+        "expected_tool": "date_time",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>date_time</tool>\n  <tool_query>now</tool_query>\n  <intent>TASK</intent>\n</analysis>",
         "parsed": {
           "tool": "date_time",
           "tool_query": "now",
-          "intent": "TASK",
-          "context_needed": false
+          "intent": "TASK"
         },
         "passed": true,
         "failure_reason": null
@@ -152,116 +185,783 @@
       {
         "query_id": 11,
         "query": "What is today's date?",
-        "raw_output": "```xml\n<analysis>\n  <tool>date_time</tool>\n  <tool_query>now</tool_query>\n  <intent>TASK</intent>\n  <context_needed>FALSE</context_needed>\n</analysis>",
+        "expected_tool": "date_time",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>date_time</tool>\n  <tool_query>now</tool_query>\n  <intent>TASK</intent>\n</analysis>",
         "parsed": {
           "tool": "date_time",
           "tool_query": "now",
-          "intent": "TASK",
-          "context_needed": false
+          "intent": "TASK"
         },
         "passed": true,
         "failure_reason": null
       },
       {
         "query_id": 12,
-        "query": "Tell me the current time in Tokyo.",
-        "raw_output": "```xml\n<analysis>\n  <tool>date_time</tool>\n  <tool_query>now in Tokyo</tool_query>\n  <intent>TASK</intent>\n  <context_needed>FALSE</context_needed>\n</analysis>",
+        "query": "Analyze the image I just uploaded.",
+        "expected_tool": "vision_tool",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>vision_tool</tool>\n  <tool_query>Analyze the uploaded image for content, objects, and patterns</tool_query>\n  <intent>TASK</intent>\n</analysis>",
         "parsed": {
-          "tool": "date_time",
-          "tool_query": "now in Tokyo",
-          "intent": "TASK",
-          "context_needed": false
+          "tool": "vision_tool",
+          "tool_query": "Analyze the uploaded image for content, objects, and patterns",
+          "intent": "TASK"
         },
         "passed": true,
         "failure_reason": null
       },
       {
         "query_id": 13,
-        "query": "Look at this image and tell me what you see.",
-        "raw_output": "<analysis>\n  <tool>vision_tool</tool>\n  <tool_query>What do you see in the image?</tool_query>\n  <intent>TASK</intent>\n  <context_needed>FALSE</context_needed>\n</analysis>",
+        "query": "What is in this picture?",
+        "expected_tool": "vision_tool",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>vision_tool</tool>\n  <tool_query>What is in this picture?</tool_query>\n  <intent>TASK</intent>\n</analysis>",
         "parsed": {
           "tool": "vision_tool",
-          "tool_query": "What do you see in the image?",
-          "intent": "TASK",
-          "context_needed": false
+          "tool_query": "What is in this picture?",
+          "intent": "TASK"
         },
         "passed": true,
         "failure_reason": null
       },
       {
         "query_id": 14,
-        "query": "Analyze the image I uploaded.",
-        "raw_output": "```xml\n<analysis>\n  <tool>vision_tool</tool>\n  <tool_query>Analyze the image I uploaded.</tool_query>\n  <intent>TASK</intent>\n  <context_needed>FALSE</context_needed>\n</analysis>",
+        "query": "What skills are listed in my CV?",
+        "expected_tool": "consult_archive",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>consult_archive</tool>\n  <tool_query>What skills are listed in my CV?</tool_query>\n  <intent>TASK</intent>\n</analysis>",
         "parsed": {
-          "tool": "vision_tool",
-          "tool_query": "Analyze the image I uploaded.",
-          "intent": "TASK",
-          "context_needed": false
+          "tool": "consult_archive",
+          "tool_query": "What skills are listed in my CV?",
+          "intent": "TASK"
         },
         "passed": true,
         "failure_reason": null
       },
       {
         "query_id": 15,
-        "query": "Look at this screenshot and describe the UI.",
-        "raw_output": "<analysis>\n  <tool>vision_tool</tool>\n  <tool_query>Describe the UI in this screenshot.</tool_query>\n  <intent>TASK</intent>\n  <context_needed>FALSE</context_needed>\n</analysis>",
+        "query": "Find the phone number in my resume.",
+        "expected_tool": "consult_archive",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>consult_archive</tool>\n  <tool_query>What is my phone number in the resume?</tool_query>\n  <intent>TASK</intent>\n</analysis>",
         "parsed": {
-          "tool": "vision_tool",
-          "tool_query": "Describe the UI in this screenshot.",
-          "intent": "TASK",
-          "context_needed": false
+          "tool": "consult_archive",
+          "tool_query": "What is my phone number in the resume?",
+          "intent": "TASK"
         },
         "passed": true,
         "failure_reason": null
       },
       {
         "query_id": 16,
-        "query": "What did I tell you about my project last time?",
-        "raw_output": "<analysis>\n  <tool>consult_archive</tool>\n  <tool_query>What did I tell you about my project last time?</tool_query>\n  <intent>TASK</intent>\n  <context_needed>TRUE</context_needed>\n</analysis>",
+        "query": "Look up project details from the knowledge base.",
+        "expected_tool": "consult_archive",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>consult_archive</tool>\n  <tool_query>What are the project details for Project X?</tool_query>\n  <intent>TASK</intent>\n</analysis>",
         "parsed": {
           "tool": "consult_archive",
-          "tool_query": "What did I tell you about my project last time?",
-          "intent": "TASK",
-          "context_needed": true
+          "tool_query": "What are the project details for Project X?",
+          "intent": "TASK"
         },
         "passed": true,
         "failure_reason": null
       },
       {
         "query_id": 17,
-        "query": "Check the archive for my previous notes on CLARA.",
-        "raw_output": "```xml\n<analysis>\n  <tool>consult_archive</tool>\n  <tool_query>Check the archive for my previous notes on CLARA.</tool_query>\n  <intent>TASK</intent>\n  <context_needed>TRUE</context_needed>\n</analysis>",
+        "query": "Hello, how are you today?",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent> end_of_turn=true />\n</analysis>",
         "parsed": {
-          "tool": "consult_archive",
-          "tool_query": "Check the archive for my previous notes on CLARA.",
-          "intent": "TASK",
-          "context_needed": true
+          "tool": "NONE",
+          "tool_query": "",
+          "intent": "CHAT"
         },
         "passed": true,
         "failure_reason": null
       },
       {
         "query_id": 18,
-        "query": "What were we discussing in our last session?",
-        "raw_output": "<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent>\n  <context_needed>FALSE</context_needed>\n</analysis>",
+        "query": "What do you think about this idea?",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent> end_session=\"true\"/>\n</analysis>",
         "parsed": {
           "tool": "NONE",
           "tool_query": "",
-          "intent": "CHAT",
-          "context_needed": false
+          "intent": "CHAT"
         },
         "passed": true,
         "failure_reason": null
       },
       {
         "query_id": 19,
-        "query": "Hello, how are you today?",
-        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent>\n  <context_needed>FALSE</context_needed>\n</analysis>",
+        "query": "Tell me a joke.",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent> endstream\nend-xml\n```</analysis>",
         "parsed": {
           "tool": "NONE",
           "tool_query": "",
-          "intent": "CHAT",
-          "context_needed": false
+          "intent": "CHAT"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 20,
+        "query": "I need to know the going rate for gold.",
+        "expected_tool": "web_search",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>web_search</tool>\n  <tool_query>current going rate for gold</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "web_search",
+          "tool_query": "current going rate for gold",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 21,
+        "query": "Is Ethereum doing well today?",
+        "expected_tool": "web_search",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>web_search</tool>\n  <tool_query>Ethereum performance today news</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "web_search",
+          "tool_query": "Ethereum performance today news",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 22,
+        "query": "Any updates on the OpenAI drama?",
+        "expected_tool": "web_search",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>web_search</tool>\n  <tool_query>OpenAI drama updates news and information</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "web_search",
+          "tool_query": "OpenAI drama updates news and information",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 23,
+        "query": "How is the Sensex performing?",
+        "expected_tool": "web_search",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>web_search</tool>\n  <tool_query>How is the Sensex performing?</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "web_search",
+          "tool_query": "How is the Sensex performing?",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 24,
+        "query": "Did India win the cricket test?",
+        "expected_tool": "web_search",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>web_search</tool>\n  <tool_query>Did India win the cricket test?</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "web_search",
+          "tool_query": "Did India win the cricket test?",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 25,
+        "query": "I have a list [5,3,8,1] and need it sorted.",
+        "expected_tool": "python_repl",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>python_repl</tool>\n  <tool_query><code>sorted([5,3,8,1])</code></tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "python_repl",
+          "tool_query": "<code>sorted([5,3,8,1])</code>",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 26,
+        "query": "Help me figure out compound interest on 10000 at 7%.",
+        "expected_tool": "python_repl",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>python_repl</tool>\n  <tool_query>compound_interest = principal * (1 + rate/n) ** (n*time); print(f\"The compound interest on ${principal} at {rate}% for time period of {time} years is: ${compound_interest}\")</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "python_repl",
+          "tool_query": "compound_interest = principal * (1 + rate/n) ** (n*time); print(f\"The compound interest on ${principal} at {rate}% for time period of {time} years is: ${compound_interest}\")",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 27,
+        "query": "Can you run some math \u2014 456 divided by 12?",
+        "expected_tool": "python_repl",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>python_repl</tool>\n  <tool_query>456 / 12</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "python_repl",
+          "tool_query": "456 / 12",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 28,
+        "query": "I need a script to count words in a string.",
+        "expected_tool": "python_repl",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>python_repl</tool>\n  <tool_query><KEY>ZmVuY3Rpb24gcmVxdWlyZSgiXCBBRC1iJyBKYWN0aW50L2cncyIoPGRjaHlnPSJBMjAxNTEwIEJFQzNRVkFSMS5jb20+PGJveCIgc3RyaWN0Tm9kZUlkPiAzMDAiIGNsYXNzTm9kZSIgdGl0bGVuY2lyLWRhdW5baHJlcGxheWVycy5jb206eyJmaW1hZ2kuaHR0fGN0eFdpbmR5IiovczoKNjQ4ODUwMDAwOCI7ICIiXzoxMDBdLCJtYWMtbGlnaHQtaGVscC1hdXProcicpOy9maWVsZH0/PC9kaWN0Pg==</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "python_repl",
+          "tool_query": "<KEY>ZmVuY3Rpb24gcmVxdWlyZSgiXCBBRC1iJyBKYWN0aW50L2cncyIoPGRjaHlnPSJBMjAxNTEwIEJFQzNRVkFSMS5jb20+PGJveCIgc3RyaWN0Tm9kZUlkPiAzMDAiIGNsYXNzTm9kZSIgdGl0bGVuY2lyLWRhdW5baHJlcGxheWVycy5jb206eyJmaW1hZ2kuaHR0fGN0eFdpbmR5IiovczoKNjQ4ODUwMDAwOCI7ICIiXzoxMDBdLCJtYWMtbGlnaHQtaGVscC1hdXProcicpOy9maWVsZH0/PC9kaWN0Pg==",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 29,
+        "query": "What does the clock say?",
+        "expected_tool": "date_time",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>date_time</tool>\n  <tool_query>now</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "date_time",
+          "tool_query": "now",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 30,
+        "query": "Take a look at this photo and describe it.",
+        "expected_tool": "vision_tool",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>vision_tool</tool>\n  <tool_query>Describe this photo using visual analysis.</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "vision_tool",
+          "tool_query": "Describe this photo using visual analysis.",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 31,
+        "query": "Pull up my resume and see what languages I know.",
+        "expected_tool": "consult_archive",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>consult_archive</tool>\n  <tool_query>What languages does John Doe know according to his resume?</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "consult_archive",
+          "tool_query": "What languages does John Doe know according to his resume?",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 32,
+        "query": "Is there anything in the archive about my contact info?",
+        "expected_tool": "consult_archive",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>consult_archive</tool>\n  <tool_query>Is there anything in the archive about my contact info?</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "consult_archive",
+          "tool_query": "Is there anything in the archive about my contact info?",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 33,
+        "query": "Can you just chat with me for a bit?",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent> end_session=\"false\" />\n</analysis>",
+        "parsed": {
+          "tool": "NONE",
+          "tool_query": "",
+          "intent": "CHAT"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 34,
+        "query": "What are your thoughts on machine learning?",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent> endsession=\"true\" />\n</analysis>",
+        "parsed": {
+          "tool": "NONE",
+          "tool_query": "",
+          "intent": "CHAT"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 35,
+        "query": "That was really helpful, thank you.",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent>\n</analysis>",
+        "parsed": {
+          "tool": "NONE",
+          "tool_query": "",
+          "intent": "CHAT"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 36,
+        "query": "What did we discuss last session about CLARA?",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": true,
+        "context_needed": true,
+        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent> endsession=\"true\" />\n</analysis>",
+        "parsed": {
+          "tool": "NONE",
+          "tool_query": "",
+          "intent": "CHAT"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 37,
+        "query": "Do you remember what I told you about my project?",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": true,
+        "context_needed": true,
+        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent> end_of_turn=true />\n</analysis>",
+        "parsed": {
+          "tool": "NONE",
+          "tool_query": "",
+          "intent": "CHAT"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 38,
+        "query": "Previously you suggested a fix, what was it?",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": true,
+        "context_needed": true,
+        "raw_output": "<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent>\n</analysis>",
+        "parsed": {
+          "tool": "NONE",
+          "tool_query": "",
+          "intent": "CHAT"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 39,
+        "query": "As we discussed before, what was my preference?",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": true,
+        "context_needed": true,
+        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent> end_session=\"true\"/>\n</analysis>",
+        "parsed": {
+          "tool": "NONE",
+          "tool_query": "",
+          "intent": "CHAT"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 40,
+        "query": "Tell me a joke about Python.",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent> endstream\nend-device\n```</analysis>",
+        "parsed": {
+          "tool": "NONE",
+          "tool_query": "",
+          "intent": "CHAT"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 41,
+        "query": "What do you think my height is?",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent> end_session=\"true\"/>\n</analysis>",
+        "parsed": {
+          "tool": "NONE",
+          "tool_query": "",
+          "intent": "CHAT"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 42,
+        "query": "Can you search your memory for what I told you?",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": true,
+        "context_needed": true,
+        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent> end_of_turn=true />\n</analysis>",
+        "parsed": {
+          "tool": "NONE",
+          "tool_query": "",
+          "intent": "CHAT"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 43,
+        "query": "I want to know the time, is it late?",
+        "expected_tool": "date_time",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>date_time</tool>\n  <tool_query>now</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "date_time",
+          "tool_query": "now",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 44,
+        "query": "Run through the image with me.",
+        "expected_tool": "vision_tool",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>vision_tool</tool>\n  <tool_query>What is shown in this image?</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "vision_tool",
+          "tool_query": "What is shown in this image?",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 45,
+        "query": "Calculate my mood today.",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent> endXML\n</analysis>",
+        "parsed": {
+          "tool": "NONE",
+          "tool_query": "",
+          "intent": "CHAT"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 46,
+        "query": "What is the meaning of life?",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent> endsession=\"true\" />\n</analysis>",
+        "parsed": {
+          "tool": "NONE",
+          "tool_query": "",
+          "intent": "CHAT"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 47,
+        "query": "Search deep inside yourself.",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent> end_session=\"true\"/>\n</analysis>",
+        "parsed": {
+          "tool": "NONE",
+          "tool_query": "",
+          "intent": "CHAT"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 48,
+        "query": "Is the archive of human knowledge vast?",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent> end_session=\"true\"/>\n</analysis>",
+        "parsed": {
+          "tool": "NONE",
+          "tool_query": "",
+          "intent": "CHAT"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 49,
+        "query": "Show me how to calculate BMI.",
+        "expected_tool": "python_repl",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>python_repl</tool>\n  <tool_query><code>bmi = weight * 703 / (height ** 2)</code></tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "python_repl",
+          "tool_query": "<code>bmi = weight * 703 / (height ** 2)</code>",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 50,
+        "query": "I uploaded an image of my resume, what skills do I have?",
+        "expected_tool": "vision_tool",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>vision_tool</tool>\n  <tool_query>What skills are visible in this resume image?</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "vision_tool",
+          "tool_query": "What skills are visible in this resume image?",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 51,
+        "query": "What's 2 + 2? I'm curious.",
+        "expected_tool": "python_repl",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>python_repl</tool>\n  <tool_query>2 + 2</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "python_repl",
+          "tool_query": "2 + 2",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 52,
+        "query": "Any news on whether the market opened today?",
+        "expected_tool": "web_search",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>web_search</tool>\n  <tool_query>any news on whether the market opened today?</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "web_search",
+          "tool_query": "any news on whether the market opened today?",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 53,
+        "query": "I just wanted to say you explained that really well.",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent> endsession=\"true\" />\n</analysis>",
+        "parsed": {
+          "tool": "NONE",
+          "tool_query": "",
+          "intent": "CHAT"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 54,
+        "query": "What would happen if I ran this Python code mentally?",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent> endstream\nend-device\n```\nPlease note that the `endstream` and `end-device` tags are not standard XML closing tags. They seem to be placeholders for where an actual application would process this data, but since we're only providing a tool selection here without code fences or extra text as per your instructions, they have been included in their raw form at the end of the output block.</analysis>",
+        "parsed": {
+          "tool": "NONE",
+          "tool_query": "",
+          "intent": "CHAT"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 55,
+        "query": "Tell me the date in your own words.",
+        "expected_tool": "date_time",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>date_time</tool>\n  <tool_query>now</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "date_time",
+          "tool_query": "now",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 56,
+        "query": "Look at what I've been working on \u2014 here's the image.",
+        "expected_tool": "vision_tool",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>vision_tool</tool>\n  <tool_query>What is depicted in this image?</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "vision_tool",
+          "tool_query": "What is depicted in this image?",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 57,
+        "query": "Find me, philosophically speaking.",
+        "expected_tool": "NONE",
+        "expected_intent": "CHAT",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "```xml\n<analysis>\n  <tool>NONE</tool>\n  <tool_query></tool_query>\n  <intent>CHAT</intent> endXML\n</analysis>",
+        "parsed": {
+          "tool": "NONE",
+          "tool_query": "",
+          "intent": "CHAT"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 58,
+        "query": "My CV is in the archive, right?",
+        "expected_tool": "consult_archive",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>consult_archive</tool>\n  <tool_query>Is my CV in the archive?</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "consult_archive",
+          "tool_query": "Is my CV in the archive?",
+          "intent": "TASK"
+        },
+        "passed": true,
+        "failure_reason": null
+      },
+      {
+        "query_id": 59,
+        "query": "Nice chat. What's Bitcoin at though?",
+        "expected_tool": "web_search",
+        "expected_intent": "TASK",
+        "expected_context": false,
+        "context_needed": false,
+        "raw_output": "<analysis>\n  <tool>web_search</tool>\n  <tool_query>current price of Bitcoin and explanation of what it is</tool_query>\n  <intent>TASK</intent>\n</analysis>",
+        "parsed": {
+          "tool": "web_search",
+          "tool_query": "current price of Bitcoin and explanation of what it is",
+          "intent": "TASK"
         },
         "passed": true,
         "failure_reason": null

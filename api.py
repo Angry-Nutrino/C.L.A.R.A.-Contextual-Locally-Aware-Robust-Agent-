@@ -14,6 +14,10 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "core_logic"))
 
 # Import the Class
 from core_logic.agent import Clara_Agent
+from core_logic.session_logger import init_session_log
+
+# Start session log before anything else
+init_session_log()
 
 app = FastAPI()
 
