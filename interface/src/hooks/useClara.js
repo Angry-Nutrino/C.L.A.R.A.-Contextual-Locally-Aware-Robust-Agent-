@@ -1,74 +1,29 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 export default function useClara() {
-  const [messages, setMessages] = useState([]);      // The Main Chat (Center)
-  const [thoughts, setThoughts] = useState([]);      // The Neural Stream (Right)
-  const [input, setInput] = useState("");            // The User's Text box
-  const [status, setStatus] = useState("disconnected"); 
+  const [messages, setMessages] = useState(() => {
+    try {
+      const saved = localStorage.getItem('clara_messages');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
+  const [thoughts, setThoughts] = useState([]);
+  const [input, setInput] = useState("");
+  const [status, setStatus] = useState("disconnected");
   const [selectedImage, setSelectedImage] = useState(null);
-  
-  // 1. THE HOLDING CELL: Catches the live stream
-  const [streamingContent, setStreamingContent] = useState(""); 
-  
+  const [streamingContent, setStreamingContent] = useState("");
+
   const socketRef = useRef(null);
+  const retryCountRef = useRef(0);
+  const retryTimerRef = useRef(null);
+  const isMountedRef = useRef(true);
 
+  // Persist messages to localStorage on every update
   useEffect(() => {
-    socketRef.current = new WebSocket("ws://localhost:8001/ws");
-
-    socketRef.current.onopen = () => {
-      console.log("✅ WebSocket Connected");
-      setStatus("connected");
-      addThought("System", "Neural Link Established.");
-    };
-
-    socketRef.current.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      
-      // STATE A: Internal Monologue -> Right Panel (THE STACK FIX)
-      if (data.type === "thought") {
-        setThoughts(prev => {
-          const newThoughts = [...prev];
-          const lastThought = newThoughts.length > 0 ? newThoughts[newThoughts.length - 1] : null;
-
-          // If it's the same turn ID from Clara, overwrite the text to create the stream effect
-          if (lastThought && lastThought.source === "Clara" && lastThought.turn_id === data.turn_id) {
-            lastThought.text = data.content;
-          } else {
-            // New turn ID detected: push a brand new block to the stack
-            newThoughts.push({ 
-              source: "Clara", 
-              text: data.content, 
-              time: new Date().toLocaleTimeString(),
-              turn_id: data.turn_id // Save the ID for the next comparison
-            });
-          }
-          return newThoughts;
-        });
-        setStatus("thinking"); 
-      } 
-      
-      // (Optional) Keep status updates separate so they render as distinct system logs
-      if (data.type === "status") {
-        addThought("System", data.content);
-        setStatus("thinking");
-      }
-      
-      // STATE B: Live Streaming -> Temporary Buffer
-      if (data.type === "stream") {
-        setStreamingContent(prev => prev + data.content); 
-        setStatus("typing"); 
-      }
-      
-      // STATE C: The Final Lock-in -> Main Chat
-      if (data.type === "final_answer") {
-        addMessage("Clara", data.content); 
-        setStreamingContent("");           
-        setStatus("idle");     
-      }
-    };
-
-    return () => socketRef.current?.close();
-  }, []);
+    try {
+      localStorage.setItem('clara_messages', JSON.stringify(messages));
+    } catch {}
+  }, [messages]);
 
   const addMessage = (sender, text, image = null) => {
     const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -79,20 +34,106 @@ export default function useClara() {
     setThoughts(prev => [...prev, { source, text, time: new Date().toLocaleTimeString() }]);
   };
 
+  const clearHistory = () => {
+    setMessages([]);
+    localStorage.removeItem('clara_messages');
+  };
+
+  const connect = useCallback(() => {
+    if (!isMountedRef.current) return;
+
+    const ws = new WebSocket("ws://localhost:8001/ws");
+    socketRef.current = ws;
+
+    ws.onopen = () => {
+      if (!isMountedRef.current) return;
+      retryCountRef.current = 0;
+      setStatus("connected");
+      addThought("System", "Neural Link Established.");
+    };
+
+    ws.onmessage = (event) => {
+      if (!isMountedRef.current) return;
+      const data = JSON.parse(event.data);
+
+      if (data.type === "thought") {
+        setThoughts(prev => {
+          const newThoughts = [...prev];
+          const last = newThoughts[newThoughts.length - 1];
+          if (last && last.source === "Clara" && last.turn_id === data.turn_id) {
+            last.text = data.content;
+          } else {
+            newThoughts.push({
+              source: "Clara",
+              text: data.content,
+              time: new Date().toLocaleTimeString(),
+              turn_id: data.turn_id
+            });
+          }
+          return newThoughts;
+        });
+        setStatus("thinking");
+      }
+
+      if (data.type === "status") {
+        addThought("System", data.content);
+        setStatus("thinking");
+      }
+
+      if (data.type === "stream") {
+        setStreamingContent(prev => prev + data.content);
+        setStatus("typing");
+      }
+
+      if (data.type === "final_answer") {
+        addMessage("Clara", data.content);
+        setStreamingContent("");
+        setStatus("idle");
+      }
+    };
+
+    ws.onerror = () => {
+      // onclose will fire right after — handle retry there
+    };
+
+    ws.onclose = () => {
+      if (!isMountedRef.current) return;
+      setStatus("disconnected");
+
+      // Exponential backoff: 1s, 2s, 4s, 8s, 16s, cap at 30s
+      const delay = Math.min(1000 * Math.pow(2, retryCountRef.current), 30000);
+      retryCountRef.current += 1;
+
+      addThought("System", `Connection lost. Retrying in ${Math.round(delay / 1000)}s... (attempt ${retryCountRef.current})`);
+
+      retryTimerRef.current = setTimeout(() => {
+        if (isMountedRef.current) connect();
+      }, delay);
+    };
+  }, []);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    connect();
+
+    return () => {
+      isMountedRef.current = false;
+      clearTimeout(retryTimerRef.current);
+      socketRef.current?.close();
+    };
+  }, [connect]);
+
   const sendMessage = () => {
     if (!input.trim() && !selectedImage) return;
-    
+
     addMessage("User", input, selectedImage);
-    
-    const payload = JSON.stringify({
-      text: input,
-      image: selectedImage
-    });
-    
+
+    const payload = JSON.stringify({ text: input, image: selectedImage });
+
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(payload);
     }
-    
+
     setInput("");
     setSelectedImage(null);
     setStatus("thinking");
@@ -102,17 +143,14 @@ export default function useClara() {
     const file = e.target.files[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setSelectedImage(reader.result); 
-      };
+      reader.onloadend = () => setSelectedImage(reader.result);
       reader.readAsDataURL(file);
     }
   };
 
-  // 2. EXPORT THE BUFFER: Expose it to the UI
-  return { 
+  return {
     messages, thoughts, input, setInput, sendMessage, status,
     selectedImage, setSelectedImage, handleImageUpload,
-    streamingContent 
+    streamingContent, clearHistory
   };
 }

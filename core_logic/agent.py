@@ -76,31 +76,29 @@ Final Answer: Your response to the user
 
 ### Examples ###
 User: Calculate the square root of 1445 using Python.
-Thought: The user wants a mathematical calculation. I must use the python_repl tool. I need to remember to import the math library because the environment is stateless.
-Action: python_repl[import math; print(math.sqrt(1445))]
+Thought: The user needs a precise mathematical result so I'll compute it accurately.
+Action: [{"tool": "python_repl", "query": "import math; print(math.sqrt(1445))"}]
 Observation: 38.01315561749642
-Thought: I have the ```result from the Python tool which is 38.01315561749642```. I can now provide the final answer.
+Thought: I have the ```computed result of 38.01315561749642```. I can now provide the final answer.
 Final Answer: The square root of 1445 is approximately 38.01.
 
 User: Use the vision tool to find me what is in the image located at path ./test.png
-Thought: The user wants to analyze an image. I must use the vision_tool to understand the content of the image located at ./test.png.
-Action: vision_tool["./test.png","What is in this image?"]
-Observation got from vision_tool from vision_tool for "./test.png:", "What is in this image?":  A bee can be seen in the image, flying or resting on a honeycomb structure. The honeycomb is composed of hexagonal cells filled with honey. The bee is depicted in yellow and black colors, contrasting with the orange and black hues of the honeycomb.
-Thought: I have the ```result from the vision tool which is A bee can be seen in the image, flying or resting on a honeycomb structure. The honeycomb is composed of hexagonal cells filled with honey. The bee is depicted in yellow and black colors, contrasting with the orange and black hues of the honeycomb.```. I can now provide the final answer.
+Thought: The user wants to know what's in an image. I'll examine it visually before answering.
+Action: [{"tool": "vision_tool", "query": "./test.png,What is in this image?"}]
+Observation: A bee can be seen in the image, flying or resting on a honeycomb structure. The honeycomb is composed of hexagonal cells filled with honey.
+Thought: I have the ```visual analysis showing a bee on a honeycomb```. I can now provide the final answer.
 Final Answer: The image shows a bee on a honeycomb structure composed of hexagonal cells filled with honey.
 
 User: Who is the current CEO of Twitter and what is the stock price of Tesla?
-Thought: This requires two separate pieces of information. I must perform one search for the Twitter CEO and a separate search for Tesla's stock. I will start with the Twitter CEO.
-Action: [{"tool": "web_search", "query": "current CEO of Twitter X"}]
-Observation: Linda Yaccarino is the CEO of X (formerly Twitter).
-Thought: Now I have the ```current CEO who is Linda Yaccarino```. Next, I need to check the Tesla stock price.
-Action: [{"tool": "web_search", "query": "current Tesla TSLA stock price"}]
-Observation: TSLA is trading at $350.50.
-Thought: I have the ```current CEO who is Linda Yaccarino``` and the ```current Tesla stock price of $350.50```. I will synthesize the final answer.
+Thought: These are two independent lookups so I can fetch both at the same time.
+Action: [{"tool": "web_search", "query": "current CEO of Twitter X"}, {"tool": "web_search", "query": "current Tesla TSLA stock price"}]
+Observation from web_search[current CEO of Twitter X]: Linda Yaccarino is the CEO of X (formerly Twitter).
+Observation from web_search[current Tesla TSLA stock price]: TSLA is trading at $350.50.
+Thought: I have the ```CEO showing Linda Yaccarino``` and the ```stock price of $350.50```. I can now answer.
 Final Answer: Linda Yaccarino is the current CEO of Twitter (X). Tesla (TSLA) is currently trading at $350.50.
 
 User: What is the price of Bitcoin and what is the current date?
-Thought: These two are completely independent — I can batch them in one action.
+Thought: These two questions are independent so I can look them up simultaneously.
 Action: [{"tool": "web_search", "query": "current Bitcoin price USD"}, {"tool": "date_time", "query": "now"}]
 Observation from web_search: Bitcoin is $95,000 USD.
 Observation from date_time: 2026-03-13 22:00:00
@@ -108,31 +106,28 @@ Thought: I have ```both results```. I can now answer.
 Final Answer: Bitcoin is currently $95,000 USD. Today's date is March 13, 2026.
 
 User: What is today's date?
-Thought: I need to check the current real-time date.
-Action: time_tool[]
-Observation: Error: Tool 'time_tool' not found. Did you mean 'date_time'?
-Thought: I made a mistake. The 'time_tool' does not exist. The correct tool from my instructions is 'date_time'. I will retry with the correct tool.
-Action: date_time[]
+Thought: The user needs today's date which I cannot know without checking in real time.
+Action: [{"tool": "date_time", "query": "now"}]
 Observation: 2025-12-11 14:30:00
-Thought: I have retrieved the date ```2025-12-11``` successfully.
+Thought: I have the ```current date of 2025-12-11```. I can now answer.
 Final Answer: Today's date is December 11, 2025.
 
 User: What is the current price of Bitcoin? If I invest $45,000 USD right now, exactly how many coins can I buy?
-Thought: To find the current price of Bitcoin, I need to use the web_search tool. After that, I will use the python_repl tool to calculate how many coins can be bought with $45,000 USD.
-Action: web_search["current price of Bitcoin"]
+Thought: I need the live Bitcoin price first before I can calculate the number of coins.
+Action: [{"tool": "web_search", "query": "current price of Bitcoin USD"}]
 Observation: The current price of Bitcoin is $92,366.50 USD.
-Thought: I have the ```current price of Bitcoin which is $92,366.50 USD```. Now I will calculate how many coins can be bought with $45,000 USD using the python_repl tool.
-Action: python_repl[print(45000 / 92366.50)]
+Thought: I have the ```Bitcoin price of $92,366.50```. Now I'll calculate how many coins $45,000 buys.
+Action: [{"tool": "python_repl", "query": "print(45000 / 92366.50)"}]
 Observation: 0.4873
-Thought: I now have the ```price of Bitcoin which is $92,366.50 USD``` and the ```number of coins that can be bought with $45,000 USD which is approximately 0.4873 coins```, thsi is enough information to answer the user. 
-Final Answer: You can buy approximately 0.4873 Bitcoin coins with an investment of $45,000 USD at the current price of $92,366.50 USD per coin.
+Thought: I have the ```calculated result of 0.4873 coins```. That's everything I need.
+Final Answer: You can buy approximately 0.4873 Bitcoin with $45,000 USD at the current price of $92,366.50 per coin.
 ### Constraints ###
 
-User:Consult the archive and tell me what technical skills I have listed in my resume.
-Thought: To find the technical skills listed in the user's resume, I need to use the consult_archive tool to search the local archives for this information.
-Action: consult_archive["technical skills in resume"]
+User: Consult the archive and tell me what technical skills I have listed in my resume.
+Thought: The user is asking about their own profile data so I'll look it up from stored records.
+Action: [{"tool": "consult_archive", "query": "technical skills in resume"}]
 Observation: "technical skills Machine Learning   Python, Java"
-Thought: I have the ```technical skills listed in the resume which are Machine Learning, Python, Java```. I can now provide the final answer.
+Thought: I have the ```skills listed showing Machine Learning, Python, Java```. I can now provide the final answer.
 Final Answer: The technical skills listed in your resume are Machine Learning, Python, and Java.
 
 1. **NO HALLUCINATION:** You are limited to the tools listed above. NEVER invent new tools (e.g., do not call 'google_search', 'calculator', or 'time_now'). If a tool is not listed, you cannot use it.
@@ -159,6 +154,18 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
 8. **SYMBOL INSIDE TOOLS:** When preforming operations in pythion_repl, Ensure that any strings passed to it does not contain a symbol in mathematical operations.
 
 9. **BE CONCISE:** Your "Thought" must be 1-2 sentences max. Do not recite these rules. Just state the plan.
+10. **THOUGHT PRESENTATION:** Your "Thought:" must be written in plain, high-level English only. Do not mention tool names, code syntax, JSON structure, or any technical implementation detail. Write as if narrating your reasoning to someone watching over your shoulder — describe *what* you are doing and *why*, not *how*. For example: instead of 'I will call web_search["current Bitcoin price"]', write 'I need to look up the current market price before I can calculate this.'
+
+### Memory ###
+At the start of every conversation, you will receive a [MEMORY_CONTEXT_BLOCK] injected into your context. This block contains:
+- **Episodic Log**: Summaries of your previous sessions with Alkama — what was discussed, what tasks were completed.
+- **Long-Term Vault**: Permanent facts you extracted yourself from prior conversations — Alkama's preferences, recurring topics, established truths.
+- **User Profile**: Alkama's role, interests, and known context.
+
+Treat this block as your long-term memory. You must:
+1. Actively reference it when relevant — do not ask Alkama things you already know from memory.
+2. Use it to maintain continuity across sessions — connect current requests to prior context when useful.
+3. If the user's message contains a blockquote (prefixed with `>`), treat it as a direct reference to a prior part of the conversation. `> [Clara]: text` means Alkama is quoting something you said previously. `> [Alkama]: text` means he is referencing something he said himself. Use the quoted text as the anchor for interpreting his current question.
 """
         self.chat_history = ""
         self.db = crud()
@@ -200,7 +207,7 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
         summaries = [ep.get("summary", "") for ep in episodes]
         slog.info(f"   [Memory] Encoding {len(summaries)} episodic entries at startup...")
         embs = self.miniLM.encode(summaries, convert_to_tensor=True)
-        return list(embs)  # list of (384,) tensors
+        return [e.to('cpu') for e in embs]  # store on CPU — must match memorize_episode embeddings
 
     def load_clara(self, model_name="phi3:mini"):
         try:
@@ -334,43 +341,55 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
         return result
     
     def parse_json_safely(self, text):
+        original = text
+
+        # 1. Hard clean: remove BOM + whitespace
+        text = text.strip().lstrip("\ufeff")
+
+        # 2. Remove markdown fences properly
+        text = re.sub(r"```(?:json)?|```", "", text).strip()
+
+        # 2b. Fix invalid JSON escape sequences (e.g. \' is not valid JSON)
+        text = text.replace("\\'", "'")
+
+        # 3. Try direct parse
         try:
-            # 1. Try direct parse first (Fastest)
             return json.loads(text)
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as e:
+            last_error = str(e)
 
-        # 2. If that fails, look for the FIRST '{' and the LAST '}'
-        # This strips away the "## ACKNOWLEDGEMENT" fluff at the end
-        try:
-            match = re.search(r"\{.*\}", text, re.DOTALL)
-            if match:
-                clean_json = match.group(0)
-                return json.loads(clean_json)
-        except Exception:
-            slog.error(f"JSON Parse Failed on fallback: {text[:50]}...")
-            pass
+        # 4. Extract smallest JSON object (non-greedy)
+        match = re.search(r"\{.*?\}", text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(0).strip())
+            except json.JSONDecodeError as e:
+                last_error = str(e)
 
-        slog.error(f"JSON Parse Failed completely on: {text[:50]}...")
+        slog.error(f"JSON Parse Failed: {last_error} | Input: {original[:80]}...")
         return None
 
     def memorize_episode(self, chat_snapshot: str):
-        if not chat_snapshot: return
         """
         Dual-Layer Memory Processing:
         1. Summarizes the last session for the Episodic Stream (Always).
         2. Extracts permanent facts for the Long-Term Vault (Conditional).
         """
+        if not chat_snapshot: return
         slog.info("   [Memory] Consolidating memories...")
         
         # The prompt asks for a JSON object with two keys: 'summary' and 'facts'
         memory_prompt = (
-            "You are Clara, ALKAMA's personal system agent. Analyze the interaction above. Perform two tasks:\n"
-            "1. SUMMARY: Write a concise, 1-2 sentence summary of the interaction from your perspective capturing the necessary details.\n"
-            "2. FACTS: Extract any new PERMANENT facts (names, preferences, project constraints) that must be saved forever.\n"
-            "Output ```ONLY``` a JSON object in this format strictly, No extra text:\n"
-            "{ \"summary\": \"Alkama asked X, we did Y.\", \"facts\": [\"Alkama likes Z\", \"Project deadline is W\"] }\n"
-            "If no new facts, leave 'facts' as empty list []."
+            "You are Clara's memory consolidation system. Your job is to compress a raw conversation into a clean memory entry.\n\n"
+            "RULES:\n"
+            "- Write the summary as a plain description of what was discussed and what happened. Example: 'Alkama asked about Galaxy S26 pricing in India. Clara searched and found base at ₹79,990.'\n"
+            "- Do NOT mention internal system details: no 'CHAT mode', 'TASK mode', 'memory context block', 'gatekeeper', 'routing', or any technical pipeline terms.\n"
+            "- Do NOT mention the prefix 'Now, execute this request:' — strip it and focus on what Alkama actually said.\n"
+            "- Keep the summary to 1-2 sentences focused purely on the content of the exchange.\n"
+            "- FACTS: Extract only new PERMANENT facts (names, preferences, project constraints, verified real-world info).\n\n"
+            "Output ONLY a JSON object, no extra text:\n"
+            "{ \"summary\": \"Alkama asked X. Clara did Y.\", \"facts\": [\"Alkama likes Z\"] }\n"
+            "If no new facts, leave 'facts' as []."
         )
         
         try:
@@ -402,7 +421,7 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
             summary = data.get("summary", "Interaction completed.")
             self.db.add_episodic_log(summary)
             # Encode and append the new episodic embedding incrementally
-            new_emb = self.miniLM.encode(summary, convert_to_tensor=True)
+            new_emb = self.miniLM.encode(summary, convert_to_tensor=True).to('cpu')
             self.episodic_embeddings.append(new_emb)
             slog.info(f"   [Memory] Episodic embedding updated ({len(self.episodic_embeddings)} total)")
 
@@ -411,18 +430,17 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
             if facts and isinstance(facts, list) and len(facts) > 0:
                 slog.info(f"   [Memory] Found {len(facts)} permanent facts.")
                 existing_facts = self.db.memory.get("long_term", [])
-                existing_embs = self.miniLM.encode(existing_facts, convert_to_tensor=True) if existing_facts else None
+                existing_embs = self.miniLM.encode(existing_facts, convert_to_tensor=True).to('cpu') if existing_facts else None
                 for fact in facts:
+                    fact_emb = self.miniLM.encode(fact, convert_to_tensor=True).to('cpu')
                     if existing_embs is not None:
-                        new_emb = self.miniLM.encode(fact, convert_to_tensor=True)
-                        sims = torch.nn.functional.cosine_similarity(new_emb.unsqueeze(0), existing_embs)
+                        sims = torch.nn.functional.cosine_similarity(fact_emb.unsqueeze(0), existing_embs)
                         if sims.max().item() >= 0.85:
                             slog.info(f"   [Memory] Skipping duplicate fact (sim={sims.max().item():.2f}): {fact[:60]}")
                             continue
                     self.db.add_long_term_fact(fact)
                     if existing_embs is not None:
-                        new_emb = self.miniLM.encode(fact, convert_to_tensor=True)
-                        existing_embs = torch.cat([existing_embs, new_emb.unsqueeze(0)], dim=0)
+                        existing_embs = torch.cat([existing_embs, fact_emb.unsqueeze(0)], dim=0)
                     existing_facts.append(fact)
 
         except Exception as e:
@@ -477,7 +495,7 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
                 "ROUTING RULES:\n"
                 "1. High Confidence (Score > 0.70): Select Tool 1. Set intent to TASK.\n"
                 "2. Mid Confidence (Score 0.36 - 0.70): Select the most relevant tool. Set intent to TASK.\n"
-                "3. Low Confidence (Score < 0.36): Select NONE. Set intent to CHAT.\n"
+                "3. Low Confidence (Score < 0.36): Select NONE. Set intent to CHAT for greetings, opinions, casual conversation, compliments, or vague follow-ups. Set intent to TASK if the query requires research, analysis, planning, comparison, financial advice, or any real-world factual information.\n"
                 "4. Vague follow-up: If the query contains unresolved references like 'it', 'that', 'again', 'same', 'the same thing', 'check it', 'do it again' with no specific subject — select NONE and set intent to CHAT.\n\n"
                 "TOOL QUERY RULES:\n"
                 "- tool_query MUST contain a specific query string when a tool is selected.\n"
@@ -560,18 +578,21 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
             except Exception as e:
                 first_observation = f"Tool error: {e}"
             slog.info(f">> [Gatekeeper] Boost observation: {str(first_observation)[:100]}...")
-            self.llm.append(assistant(
-                f"Thought: Based on the request, I should use {tool_name} first.\n"
-                f"Action: {tool_name}[{tool_query}]"
+            self.llm.append(user(
+                f"[GATEKEEPER_BOOST] The system pre-fetched a result that may be relevant to your task.\n"
+                f"Tool used: {tool_name}\n"
+                f"Query used: {tool_query}\n"
+                f"Result: {first_observation}\n\n"
+                f"Use this result only if it is relevant to the user's actual request. "
+                f"If it does not match or does not answer the question, ignore it and use the correct tool with the right query yourself."
             ))
-            self.llm.append(user(f"Observation got from {tool_name}: {first_observation}"))
 
         return {"intent": intent, "tool": tool_name, "tool_query": tool_query}
 
 
 
     async def process_request(self, query, image_data=None, on_step_update=None):
-        # query = input("Enter your mission for CLARA: ")
+        try:
             slog.info(f"\n=== New Mission: {query} ===")
             final_prompt = query
             if image_data:
@@ -624,7 +645,11 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
             self.llm = self.client.chat.create(model="grok-4-1-fast-reasoning")
 
             return final_answer
-            
+
+        except Exception as e:
+            slog.error(f"   [process_request] Unhandled error: {e}")
+            return f"I encountered an internal error: {e}"
+
     def run(self, direct_input=None, image_data=None) -> str:
         """
         Main Loop: Now Powered by Ears 👂 (Async Wrapper Version)
@@ -737,31 +762,12 @@ Final Answer: The technical skills listed in your resume are Machine Learning, P
                 continue
                 
             raw_content += token
-            
-            # STATE A: Internal Monologue (If it thinks before chatting)
-            if "Thought:" in raw_content and "Final Answer:" not in raw_content:
-                start_idx = raw_content.find("Thought:") + 8
-                current_thought = raw_content[start_idx:].strip()
-                if current_thought and on_step_update:
-                    await on_step_update(current_thought, type="thought", turn_id=0)
-                    
-            # STATE C: The user-facing chat stream
-            elif "Final Answer:" in raw_content:
-                start_idx = raw_content.find("Final Answer:") + 13
-                current_answer = raw_content[start_idx:]
-                
-                # Only send the NEW characters
-                new_chars = current_answer[answer_sent_len:]
-                if new_chars and on_step_update:
-                    await on_step_update(new_chars, type="stream", turn_id=0)
-                    answer_sent_len += len(new_chars)
-                    
-            # Fallback: If it ignores the ReAct format and just talks directly
-            elif "Thought:" not in raw_content and "Final Answer:" not in raw_content and len(raw_content) > 13:
-                new_chars = raw_content[answer_sent_len:]
-                if new_chars and on_step_update:
-                    await on_step_update(new_chars, type="stream", turn_id=0)
-                    answer_sent_len += len(new_chars)
+
+            # Stream tokens directly — CHAT mode responds without ReAct format
+            new_chars = raw_content[answer_sent_len:]
+            if new_chars and on_step_update:
+                await on_step_update(new_chars, type="stream", turn_id=0)
+                answer_sent_len += len(new_chars)
 
         # 2. Stream Complete. Clean up.
         await asyncio.sleep(0.05) 

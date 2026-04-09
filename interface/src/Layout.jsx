@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 // 1. UPDATED IMPORTS: Added Paperclip and X for the file upload UI
 import { Terminal, Cpu, MessageSquare, Menu, Send, Paperclip, X , Zap, Activity, MapPin,
   Shield, Target, User, Disc
@@ -12,6 +14,7 @@ export default function Layout() {
   const [viewImage, setViewImage] = useState(null);
   const [isFocused, setIsFocused] = useState(false);
   const [soul, setSoul] = useState(null);
+  const [quotePopup, setQuotePopup] = useState(null); // { x, y, text, sender }
 
   useEffect(() => {
     // Poll the soul every 5 seconds to keep vitals "alive"
@@ -28,10 +31,10 @@ export default function Layout() {
   }, []);
   
   // 2. UPDATED HOOK: Getting the image tools from useClara
-  const { 
+  const {
     messages, thoughts, input, setInput, sendMessage, status,
     selectedImage, setSelectedImage, handleImageUpload,
-    streamingContent
+    streamingContent, clearHistory
   } = useClara();
   
   const chatEndRef = useRef(null);
@@ -185,16 +188,46 @@ export default function Layout() {
         <header className="h-14 border-b border-[var(--border-subtle)] flex items-center justify-between px-4 bg-[var(--bg-depth)]/80 backdrop-blur-md sticky top-0 z-10">
           <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 hover:bg-white/5 rounded"><Menu size={20} /></button>
           
-          <span className={`text-xs font-bold px-3 py-1 rounded-full transition-all 
-            ${status === 'thinking' ? 'bg-emerald-500/20 text-emerald-400 animate-pulse border border-emerald-500/50' : 'opacity-30'}`}>
-            {status === 'thinking' ? 'PROCESSING...' : 'IDLE'}
+          <span className={`text-xs font-bold px-3 py-1 rounded-full transition-all border
+            ${status === 'thinking' || status === 'typing'
+              ? 'bg-emerald-500/20 text-emerald-400 animate-pulse border-emerald-500/50'
+              : status === 'disconnected'
+              ? 'bg-red-500/20 text-red-400 border-red-500/50 animate-pulse'
+              : 'opacity-30 border-transparent'}`}>
+            {status === 'thinking' || status === 'typing'
+              ? 'PROCESSING...'
+              : status === 'disconnected'
+              ? 'DISCONNECTED'
+              : 'IDLE'}
           </span>
           
-          <button onClick={() => setIsBrainOpen(!isBrainOpen)} className="p-2 hover:bg-white/5 rounded text-purple-400"><Cpu size={20} /></button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={clearHistory}
+              className="text-[10px] font-mono px-2 py-1 rounded border border-white/10 text-white/30 hover:text-red-400 hover:border-red-500/40 hover:bg-red-500/10 transition-all duration-200"
+            >
+              CLEAR
+            </button>
+            <button onClick={() => setIsBrainOpen(!isBrainOpen)} className="p-2 hover:bg-white/5 rounded text-purple-400"><Cpu size={20} /></button>
+          </div>
         </header>
 
         {/* MESSAGES AREA */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-6 scroll-smooth pb-32">
+        <div
+          className="flex-1 overflow-y-auto p-4 space-y-6 scroll-smooth pb-32"
+          onMouseUp={() => {
+            const sel = window.getSelection();
+            const text = sel?.toString().trim();
+            if (!text) { setQuotePopup(null); return; }
+            let node = sel.anchorNode;
+            while (node && !node.dataset?.msgIndex) node = node.parentElement;
+            const sender = node ? messages[parseInt(node.dataset.msgIndex)]?.sender : null;
+            const range = sel.getRangeAt(0);
+            const rect = range.getBoundingClientRect();
+            setQuotePopup({ x: rect.left + rect.width / 2, y: rect.top - 10, text, sender });
+          }}
+          onClick={() => { if (!window.getSelection()?.toString().trim()) setQuotePopup(null); }}
+        >
           {messages.length === 0 && !streamingContent ? (
             <div className="text-center mt-20 opacity-30">
               <h1 className="text-4xl font-black mb-2">INITIALIZED</h1>
@@ -202,7 +235,7 @@ export default function Layout() {
             </div>
           ) : (
             messages.map((msg, i) => (
-              <div key={i} className={`flex ${msg.sender === "User" ? "justify-end" : "justify-start"}`}>
+              <div key={i} data-msg-index={i} className={`flex ${msg.sender === "User" ? "justify-end" : "justify-start"}`}>
                 
                 {/* 1. THE BUBBLE CONTAINER (Wrap everything here) */}
                 <div className={`max-w-[80%] p-4 rounded-xl flex flex-col gap-2 
@@ -224,7 +257,16 @@ export default function Layout() {
                   )}
 
                   {/* 3. TEXT (Below the image) */}
-                  <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
+                  {msg.sender === "Clara" ? (
+                    <div className="prose prose-invert prose-sm max-w-none leading-relaxed
+                        prose-code:bg-black/40 prose-code:text-emerald-300 prose-code:px-1 prose-code:rounded
+                        prose-pre:bg-black/60 prose-pre:border prose-pre:border-white/10 prose-pre:rounded-lg
+                        prose-a:text-emerald-400 prose-strong:text-white prose-headings:text-white">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+                    </div>
+                  ) : (
+                    <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
+                  )}
                   
                 </div>
               </div>
@@ -235,10 +277,13 @@ export default function Layout() {
           {streamingContent && (
             <div className="flex justify-start animate-in fade-in duration-100">
               <div className="max-w-[80%] p-4 rounded-xl flex flex-col gap-2 bg-emerald-900/10 border border-emerald-500/20 text-emerald-100 shadow-[0_0_15px_rgba(16,185,129,0.1)]">
-                <p className="whitespace-pre-wrap leading-relaxed">
-                  {streamingContent}
-                  <span className="inline-block w-2 h-4 ml-1 bg-emerald-400 animate-pulse align-middle"></span>
-                </p>
+                <div className="prose prose-invert prose-sm max-w-none leading-relaxed
+                    prose-code:bg-black/40 prose-code:text-emerald-300 prose-code:px-1 prose-code:rounded
+                    prose-pre:bg-black/60 prose-pre:border prose-pre:border-white/10 prose-pre:rounded-lg
+                    prose-a:text-emerald-400 prose-strong:text-white prose-headings:text-white">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingContent}</ReactMarkdown>
+                </div>
+                <span className="inline-block w-2 h-4 bg-emerald-400 animate-pulse"></span>
               </div>
             </div>
           )}
@@ -277,6 +322,7 @@ export default function Layout() {
 
             {/* TEXT INPUT AREA */}
             <textarea
+              ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -285,9 +331,23 @@ export default function Layout() {
                   sendMessage();
                 }
               }}
-              onFocus={() => setIsFocused(true)} // <--- Glow ON
-              onBlur={() => setIsFocused(false)}   // <--- Glow OFF
-              placeholder="Message Clara..."
+              onPaste={(e) => {
+                const items = e.clipboardData?.items;
+                if (!items) return;
+                for (const item of items) {
+                  if (item.type.startsWith("image/")) {
+                    e.preventDefault();
+                    const file = item.getAsFile();
+                    const reader = new FileReader();
+                    reader.onload = (ev) => setSelectedImage(ev.target.result);
+                    reader.readAsDataURL(file);
+                    break;
+                  }
+                }
+              }}
+              onFocus={() => setIsFocused(true)}
+              onBlur={() => setIsFocused(false)}
+              placeholder="Message Clara... (Ctrl+V to paste image)"
               className="w-full bg-transparent text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-0 resize-none py-3 max-h-32"
               rows={1}
               style={{ minHeight: '44px' }}
@@ -307,11 +367,23 @@ export default function Layout() {
             </button>
           </div>
           
-          {/* IMAGE PREVIEW (Optional: If you want to see the filename below the bar) */}
+          {/* IMAGE PREVIEW THUMBNAIL */}
           {selectedImage && (
-             <div className="absolute -top-8 left-6 text-xs text-emerald-400 bg-black/80 px-2 py-1 rounded border border-emerald-500/30">
-                Image Attached
-             </div>
+            <div className="absolute -top-16 left-6 flex items-center gap-2 bg-black/80 border border-emerald-500/30 rounded-xl px-2 py-2 shadow-lg">
+              <img
+                src={selectedImage}
+                alt="Preview"
+                className="h-10 w-10 object-cover rounded-lg border border-white/10 cursor-zoom-in"
+                onClick={() => setViewImage(selectedImage)}
+              />
+              <span className="text-xs text-emerald-400 font-mono">Image ready</span>
+              <button
+                onClick={() => setSelectedImage(null)}
+                className="ml-1 text-white/30 hover:text-white/80 transition-colors"
+              >
+                <X size={14} />
+              </button>
+            </div>
           )}
         </div>
       </main>
@@ -353,6 +425,28 @@ export default function Layout() {
            <div ref={brainEndRef} className="h-4" />
         </div>
       </aside>
+      {/* --- QUOTE POPUP --- */}
+      {quotePopup && (
+        <button
+          className="fixed z-50 text-xs font-mono px-3 py-1.5 rounded-full shadow-lg
+                     -translate-x-1/2 -translate-y-full
+                     bg-emerald-600/90 text-white border border-emerald-400/30
+                     hover:bg-emerald-500 hover:shadow-[0_0_12px_rgba(16,185,129,0.4)]
+                     transition-all duration-150 animate-in fade-in zoom-in-95"
+          style={{ left: quotePopup.x, top: quotePopup.y }}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            const label = quotePopup.sender === "Clara" ? "[Clara]" : "[Alkama]";
+            setInput(prev => `> ${label}: ${quotePopup.text}\n\n${prev}`);
+            setQuotePopup(null);
+            window.getSelection()?.removeAllRanges();
+            textareaRef.current?.focus();
+          }}
+        >
+          QUOTE
+        </button>
+      )}
+
       {/* --- LIGHTBOX MODAL --- */}
       {viewImage && (
         <div 

@@ -35,6 +35,7 @@ class crud:
 
     def get_full_context(self):
         """
+        DEPRECATED — replaced by get_smart_context(). Kept for reference.
         Fetches the Soul (Profile), The Vault (Long Term), and The Stream (Last 10 interactions).
         """
         profile = self.memory.get("user_profile", {})
@@ -91,8 +92,8 @@ class crud:
 
         # 2. Top 2 semantic hits via MiniLM
         if episodes and episodic_embeddings and len(episodic_embeddings) == len(episodes):
-            q_emb  = miniLM.encode(query, convert_to_tensor=True)
-            all_embs = torch.stack(episodic_embeddings)  # (N, 384)
+            q_emb  = miniLM.encode(query, convert_to_tensor=True).to('cpu')
+            all_embs = torch.stack(episodic_embeddings)  # (N, 384) — all on CPU
             cos_sims = torch.nn.functional.cosine_similarity(q_emb.unsqueeze(0), all_embs)
             top2_indices = cos_sims.topk(min(2, len(episodes))).indices.tolist()
             for idx in top2_indices:

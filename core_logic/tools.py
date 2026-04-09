@@ -8,6 +8,8 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 # from rag import DB_PATH
 import os
 
+load_dotenv()  # Load once at module level
+
 
 RAG_ENGINE= None
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -15,7 +17,10 @@ DB_PATH=os.path.join(current_dir, "knowledge_base")
 
 # Pre-loading rag for faster inference. 
 print("   [Archive] 🔌 Pre-loading RAG Engine for instant access...")
-_embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+_embeddings = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2",
+    model_kwargs={"device": "cpu"}  # RAG on CPU — VRAM reserved for agent MiniLM + Phi3
+)
 
 if os.path.exists(DB_PATH):
     RAG_ENGINE = FAISS.load_local(
@@ -49,25 +54,22 @@ def run_python_code(code: str) -> str:
 
     return output
 
-def web_search(query: str):
+def web_search(query: str) -> dict:
     try:
-        load_dotenv()
-        ap= os.getenv("tavily_api")
-        client=TavilyClient(ap)
-        response=client.search(
+        ap = os.getenv("tavily_api")
+        client = TavilyClient(ap)
+        response = client.search(
             query=query,
             include_answer="advanced",
             search_depth="advanced",
             max_results=2
-            )
+        )
         return response
-        
-    
     except Exception as e:
-        return f"Error doing web_search : {e}"
+        return {"answer": f"Error doing web_search: {e}", "results": []}
     
 def get_time_date() -> str:
-    return datetime.now()
+    return str(datetime.now())
 
 def consult_archive(query: str) -> str:
     global RAG_ENGINE
