@@ -14,6 +14,8 @@ venv/
 env/
 Lib/
 Scripts/
+briefs/
+tests/
 
 # --- NODE / REACT (CRITICAL ADDITION) ---
 node_modules/
@@ -38,6 +40,13 @@ faiss_index.bin
 faiss_index.pkl
 *.db
 *.sqlite3
+
+core_logic/knowledge_base/
+core_logic/docs/
+core_logic/photos/
+
+# --- TRACES ---
+traces/
 
 # --- TEMP FILES (Specific, not global) ---
 # Only ignore the temp inputs, not your UI assets

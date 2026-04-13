@@ -257,6 +257,21 @@ export default function Layout() {
                   )}
 
                   {/* 3. TEXT (Below the image) */}
+                  {msg.sender === "Clara" && msg.messageId && (() => {
+                    const userMsg = messages.find(
+                      m => m.sender === "User" && m.messageId === msg.messageId
+                    );
+                    return userMsg ? (
+                      <div style={{
+                        fontSize: "0.7rem",
+                        color: "rgba(16,185,129,0.5)",
+                        marginBottom: "4px",
+                        fontStyle: "italic"
+                      }}>
+                        ↳ re: "{userMsg.text.slice(0, 50)}{userMsg.text.length > 50 ? "…" : ""}"
+                      </div>
+                    ) : null;
+                  })()}
                   {msg.sender === "Clara" ? (
                     <div className="prose prose-invert prose-sm max-w-none leading-relaxed
                         prose-code:bg-black/40 prose-code:text-emerald-300 prose-code:px-1 prose-code:rounded

@@ -70,10 +70,11 @@ class crud:
         context += "--------------------------------"
         return context
 
-    def get_smart_context(self, query: str, miniLM, episodic_embeddings: list) -> str:
+    def get_smart_context(self, query: str, q_emb, episodic_embeddings: list) -> str:
         """
         Smart retrieval: last 3 episodic entries + top 2 semantic hits.
         Vault always included. Deduplicates overlaps.
+        q_emb: pre-computed CPU tensor from agent._encode(); avoids calling miniLM here.
         """
         import torch
 
@@ -90,9 +91,8 @@ class crud:
             for idx in last3:
                 selected_indices.add(idx)
 
-        # 2. Top 2 semantic hits via MiniLM
+        # 2. Top 2 semantic hits — use pre-computed q_emb (already on CPU)
         if episodes and episodic_embeddings and len(episodic_embeddings) == len(episodes):
-            q_emb  = miniLM.encode(query, convert_to_tensor=True).to('cpu')
             all_embs = torch.stack(episodic_embeddings)  # (N, 384) — all on CPU
             cos_sims = torch.nn.functional.cosine_similarity(q_emb.unsqueeze(0), all_embs)
             top2_indices = cos_sims.topk(min(2, len(episodes))).indices.tolist()

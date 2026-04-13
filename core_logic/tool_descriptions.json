@@ -129,5 +129,93 @@
       "what did you suggest previously in our chat",
       "look within yourself for the answer"
     ]
+  },
+  {
+    "name": "fs_read_file",
+    "description": "read the contents of a local file on the computer",
+    "sub_descriptions": [
+      "read this file and tell me what is in it",
+      "open this file and summarize the contents",
+      "what does this text file say",
+      "show me the contents of this document",
+      "read the file at this path",
+      "what is written inside this file",
+      "open and read my notes file",
+      "read this config file",
+      "what is in this log file",
+      "show me what this script contains",
+      "read my readme file",
+      "open this json or csv file",
+      "read the contents of this python file",
+      "what does this markdown file contain"
+    ]
+  },
+  {
+    "name": "fs_list_directory",
+    "description": "list files and folders inside a directory on the computer",
+    "sub_descriptions": [
+      "what files are in this folder",
+      "list everything in this directory",
+      "show me what is inside this folder",
+      "what is in my downloads folder",
+      "list the files in this path",
+      "what folders are inside this directory",
+      "show me the contents of this directory",
+      "navigate to this folder and list files",
+      "what documents are in my desktop folder",
+      "list files in my project directory",
+      "show me all files in this location",
+      "what is inside this folder on my computer"
+    ]
+  },
+  {
+    "name": "fs_write_file",
+    "description": "write or save content to a file on the computer",
+    "sub_descriptions": [
+      "save this text to a file",
+      "write this content to a file",
+      "create a new file with this content",
+      "save my notes to a text file",
+      "write this output to a file on disk",
+      "save these results to a file",
+      "create a file and put this in it",
+      "write this to my desktop as a file",
+      "save this as a text file",
+      "export this content to a file"
+    ]
+  },
+  {
+    "name": "fs_run_command",
+    "description": "run a terminal shell command on the computer",
+    "sub_descriptions": [
+      "run this command in the terminal",
+      "execute this shell command",
+      "run this script from the command line",
+      "open terminal and run this",
+      "execute this command on my computer",
+      "run this powershell command",
+      "run this python script from terminal",
+      "execute a command to check something",
+      "run a terminal command",
+      "run a command and show me the output"
+    ]
+  },
+  {
+    "name": "query_task_status",
+    "description": "check the status of a task or find out why something has not been done yet",
+    "sub_descriptions": [
+      "why hasn't this task finished",
+      "what is the status of this task",
+      "has this been done yet",
+      "why is this still pending",
+      "what happened to the task I asked about",
+      "is this task complete",
+      "why was this task paused",
+      "what is blocking this task",
+      "check if something got done",
+      "look up what happened with a previous task",
+      "why didn't you finish this",
+      "what is the progress on this"
+    ]
   }
 ]

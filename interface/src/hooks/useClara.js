@@ -17,6 +17,8 @@ export default function useClara() {
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef(null);
   const isMountedRef = useRef(true);
+  const pendingRef = useRef(new Map());
+  // key: message_id → value: true (presence set for in-flight messages)
 
   // Persist messages to localStorage on every update
   useEffect(() => {
@@ -25,9 +27,12 @@ export default function useClara() {
     } catch {}
   }, [messages]);
 
-  const addMessage = (sender, text, image = null) => {
+  const addMessage = (sender, text, image = null, messageId = null) => {
     const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    setMessages(prev => [...prev, { sender, text, image, time: timestamp }]);
+    if (sender === "User" && messageId) {
+      pendingRef.current.set(messageId, true);
+    }
+    setMessages(prev => [...prev, { sender, text, image, time: timestamp, messageId }]);
   };
 
   const addThought = (source, text) => {
@@ -86,9 +91,13 @@ export default function useClara() {
       }
 
       if (data.type === "final_answer") {
-        addMessage("Clara", data.content);
+        const msgId = data.message_id || null;
+        addMessage("Clara", data.content, null, msgId);
+        if (msgId) pendingRef.current.delete(msgId);
         setStreamingContent("");
-        setStatus("idle");
+        if (pendingRef.current.size === 0) {
+          setStatus("idle");
+        }
       }
     };
 
@@ -126,9 +135,14 @@ export default function useClara() {
   const sendMessage = () => {
     if (!input.trim() && !selectedImage) return;
 
-    addMessage("User", input, selectedImage);
+    const messageId = crypto.randomUUID();
+    addMessage("User", input, selectedImage, messageId);
 
-    const payload = JSON.stringify({ text: input, image: selectedImage });
+    const payload = JSON.stringify({
+      text: input,
+      image: selectedImage,
+      message_id: messageId,
+    });
 
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(payload);
