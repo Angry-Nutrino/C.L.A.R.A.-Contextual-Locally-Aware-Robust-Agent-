@@ -89,7 +89,7 @@ class EnvironmentWatcher:
         agent,
         event_loop: asyncio.AbstractEventLoop,
         watch_paths: list = None,
-        memory_growth_threshold: int = 5,
+        memory_growth_threshold: int = 20,
         interaction_density_threshold: int = 10,
     ):
         self._task_graph  = task_graph
@@ -105,6 +105,7 @@ class EnvironmentWatcher:
         self._last_episode_count: int = 0
         self._interaction_count: int  = 0
         self._emit_lock: asyncio.Lock = asyncio.Lock()
+        self._last_file_change: dict  = {}  # path → last emit timestamp (monotonic)
 
     # ------------------------------------------------------------------ public
 
@@ -114,9 +115,13 @@ class EnvironmentWatcher:
             return
         self._running = True
 
-        # Snapshot current episode count as baseline
-        self._last_episode_count = len(
-            self._agent.db.memory.get("episodic_log", [])
+        # Snapshot current user-facing episode count as baseline
+        SYSTEM_PREFIXES = ("[AUTONOMOUS]", "[TASK FAILED]", "[TASK RETRY]",
+                           "[TASK PAUSED]", "[TASK DEFERRED]", "[TASK CONFLICT]")
+        episodes = self._agent.db.memory.get("episodic_log", [])
+        self._last_episode_count = sum(
+            1 for ep in episodes
+            if not ep.get("summary", "").startswith(SYSTEM_PREFIXES)
         )
 
         # Start watchdog Observer
@@ -156,17 +161,26 @@ class EnvironmentWatcher:
 
     async def check_memory_growth(self) -> None:
         """
-        Compare current episodic log size against last snapshot.
-        Emits memory_growth trigger when growth >= threshold.
+        Compare current user-facing episodic entry count against last snapshot.
+        Only counts entries without [AUTONOMOUS]/[TASK *] prefixes — autonomous
+        background entries should not trigger memory_growth noise.
+        Emits memory_growth trigger when user-facing growth >= threshold.
         """
-        current_count = len(self._agent.db.memory.get("episodic_log", []))
-        if current_count - self._last_episode_count >= self._memory_growth_threshold:
-            self._last_episode_count = current_count
+        SYSTEM_PREFIXES = ("[AUTONOMOUS]", "[TASK FAILED]", "[TASK RETRY]",
+                           "[TASK PAUSED]", "[TASK DEFERRED]", "[TASK CONFLICT]")
+        episodes = self._agent.db.memory.get("episodic_log", [])
+        user_count = sum(
+            1 for ep in episodes
+            if not ep.get("summary", "").startswith(SYSTEM_PREFIXES)
+        )
+        if user_count - self._last_episode_count >= self._memory_growth_threshold:
+            self._last_episode_count = user_count
             await self._emit_trigger("memory_growth")
 
     # ------------------------------------------------------------------ private
 
     async def _on_file_changed(self, path: str, change_type: str) -> None:
+        import time
         if not self._running:
             return
 
@@ -181,6 +195,12 @@ class EnvironmentWatcher:
         if normalised.endswith("memory.json"):
             await self.check_memory_growth()
             return
+
+        # Debounce: skip if same path fired within 5 seconds
+        now = time.monotonic()
+        if now - self._last_file_change.get(normalised, 0) < 5.0:
+            return  # coalesce rapid saves — still processing the previous one
+        self._last_file_change[normalised] = now
 
         await self._emit_trigger(
             trigger_name="file_change",

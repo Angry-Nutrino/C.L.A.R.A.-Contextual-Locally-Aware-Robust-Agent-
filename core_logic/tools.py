@@ -110,7 +110,7 @@ def fs_read_file(path: str) -> str:
     Enforces a 10,000 character read limit to protect context window.
     """
     try:
-        p = pathlib.Path(path)
+        p = pathlib.Path(path).expanduser()
         if not p.exists():
             return f"Error: File not found: {path}"
         if not p.is_file():
@@ -131,7 +131,7 @@ def fs_list_directory(path: str) -> str:
     Returns a formatted string listing, or an error message on failure.
     """
     try:
-        p = pathlib.Path(path)
+        p = pathlib.Path(path).expanduser()
         if not p.exists():
             return f"Error: Path not found: {path}"
         if not p.is_dir():
@@ -158,7 +158,7 @@ def fs_write_file(path: str, content: str) -> str:
     Returns confirmation or error message.
     """
     try:
-        p = pathlib.Path(path)
+        p = pathlib.Path(path).expanduser()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
         return f"File written successfully: {path} ({len(content):,} chars)"
@@ -198,6 +198,99 @@ def fs_run_command(command: str) -> str:
         return "Error: Command timed out after 30 seconds"
     except Exception as e:
         return f"Error running command: {e}"
+
+
+# ── Vision Tool (Grok Vision API) ─────────────────────────────────────────
+
+import base64
+
+# Injected at startup by api.py — allows vision functions to access the
+# live xAI client without circular imports.
+_xai_client_ref = None
+
+def set_xai_client(client) -> None:
+    """Called once by api.py after Client is created."""
+    global _xai_client_ref
+    _xai_client_ref = client
+
+
+def analyze_image_grok(
+    client,
+    path: str,
+    question: str = "Describe what you see in this image in detail.",
+    detail: str = "high",
+) -> str:
+    """
+    Analyze an image using Grok Vision API.
+    Reads image from local path, encodes as base64, sends to Grok.
+    Supports: jpg, jpeg, png, gif, webp.
+    Returns description string or error message.
+    """
+    try:
+        p = pathlib.Path(path.strip().strip('"').strip("'"))
+        if not p.exists():
+            return f"Error: Image not found at path: {path}"
+        if not p.is_file():
+            return f"Error: Path is not a file: {path}"
+
+        ext = p.suffix.lower()
+        media_types = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".png": "image/png",  ".gif": "image/gif",
+            ".webp": "image/webp",
+        }
+        media_type = media_types.get(ext, "image/jpeg")
+
+        b64 = base64.b64encode(p.read_bytes()).decode("utf-8")
+        data_url = f"data:{media_type};base64,{b64}"
+
+        from xai_sdk.chat import user, image as sdk_image
+        llm = client.chat.create(model="grok-4-1-fast-non-reasoning")
+        llm.append(user(sdk_image(data_url, detail=detail), question))
+        response = llm.sample()
+        return response.content.strip()
+
+    except Exception as e:
+        return f"Error analyzing image: {e}"
+
+
+def analyze_images_grok(
+    client,
+    paths: list,
+    question: str = "Describe what you see in these images.",
+    detail: str = "high",
+) -> str:
+    """
+    Analyze multiple images in a single Grok Vision API call.
+    paths: list of absolute path strings.
+    """
+    try:
+        from xai_sdk.chat import user, image as sdk_image
+        content_parts = []
+        for path in paths:
+            p = pathlib.Path(path.strip().strip('"').strip("'"))
+            if not p.exists():
+                content_parts.append(f"[Image not found: {path}]")
+                continue
+            ext = p.suffix.lower()
+            media_types = {
+                ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".png": "image/png", ".gif": "image/gif",
+                ".webp": "image/webp",
+            }
+            media_type = media_types.get(ext, "image/jpeg")
+            b64 = base64.b64encode(p.read_bytes()).decode("utf-8")
+            data_url = f"data:{media_type};base64,{b64}"
+            content_parts.append(sdk_image(data_url, detail=detail))
+
+        content_parts.append(question)
+        llm = client.chat.create(model="grok-4-1-fast-non-reasoning")
+        llm.append(user(*content_parts))
+        response = llm.sample()
+        return response.content.strip()
+
+    except Exception as e:
+        return f"Error analyzing images: {e}"
 
 
 # ── Task Status Tool ───────────────────────────────────────────────────────

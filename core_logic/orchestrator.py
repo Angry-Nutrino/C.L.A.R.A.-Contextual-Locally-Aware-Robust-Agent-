@@ -103,7 +103,7 @@ class Orchestrator:
         await self._dispatch_ready_tasks()
         while self._running:
             try:
-                events = await self._event_queue.drain_blocking(timeout=1.0)
+                events = await self._event_queue.drain_blocking(timeout=0.1)
                 self._trace(
                     "orchestrator_tick",
                     events_drained=len(events),
@@ -143,13 +143,8 @@ class Orchestrator:
 
                 elif event.type == "task_failed":
                     task_id = event.payload["task_id"]
-                    error = event.payload["error"]
-                    # Grab future before state update (failed is not terminal, but be consistent)
-                    task = self._task_graph.get_task(task_id)
-                    future = task.context.get("response_future") if task else None
-                    self._task_graph.update_state(task_id, "failed")
-                    if future and not future.done():
-                        future.set_result(f"Error: {error}")
+                    error   = event.payload["error"]
+                    await self._handle_task_failure(task_id, error)
 
                 elif event.type == "system_trigger":
                     task_id = event.payload.get("task_id")
@@ -287,7 +282,7 @@ class Orchestrator:
                 )
                 # Log deferral to episodic memory
                 try:
-                    self._agent.db.add_episodic_log(
+                    self._agent.log_system_episode(
                         f"[TASK DEFERRED] '{task.goal[:60]}' deferred — "
                         f"{result.reason[:100]}"
                     )
@@ -325,7 +320,7 @@ class Orchestrator:
 
         # Log conflict to episodic memory
         try:
-            self._agent.db.add_episodic_log(
+            self._agent.log_system_episode(
                 f"[TASK CONFLICT] '{task.goal[:60]}' could not start — "
                 f"{reason[:100]}"
             )
@@ -339,6 +334,76 @@ class Orchestrator:
                 f"[Orchestrator] Failed to invalidate conflicted task "
                 f"{task.id[:8]}: {e}"
             )
+
+    async def _handle_task_failure(self, task_id: str, error: str) -> None:
+        """
+        On task failure: check retry count. If under limit, create a new
+        task with failure summary attached. If limit reached, notify user.
+        """
+        MAX_ATTEMPTS = 3
+
+        task = self._task_graph.get_task(task_id)
+        if task is None:
+            return
+
+        attempt = task.context.get("attempt", 1)
+        future  = task.context.get("response_future")
+
+        self._task_graph.update_state(task_id, "failed")
+
+        if attempt >= MAX_ATTEMPTS:
+            slog.warning(
+                f"[Orchestrator] Task {task_id[:8]} failed after "
+                f"{attempt} attempts. Notifying user."
+            )
+            if future and not future.done():
+                future.set_result(
+                    f"I was unable to complete this after {attempt} attempts. "
+                    f"Last error: {error}"
+                )
+            try:
+                self._agent.log_system_episode(
+                    f"[TASK FAILED] '{task.goal[:60]}' failed after "
+                    f"{attempt} attempts: {error[:100]}"
+                )
+            except Exception:
+                pass
+            return
+
+        # Build failure summary for retry context
+        failure_summary = {
+            "reason": error,
+            "attempt": attempt,
+            "original_goal": task.goal,
+            "suggested_adjustment": (
+                "Try a different approach or break into smaller steps."
+            ),
+        }
+
+        slog.info(
+            f"[Orchestrator] Task {task_id[:8]} failed (attempt {attempt}). "
+            f"Retrying with failure context..."
+        )
+
+        retry_context = {**task.context, "failure_summary": failure_summary,
+                         "attempt": attempt + 1}
+
+        self._task_graph.add_task(
+            goal=task.goal,
+            priority=task.priority,
+            reversibility=task.reversibility,
+            dependencies=[],
+            context=retry_context,
+            origin=task.origin,
+        )
+
+        try:
+            self._agent.log_system_episode(
+                f"[TASK RETRY] '{task.goal[:60]}' retrying "
+                f"(attempt {attempt + 1}/{MAX_ATTEMPTS})"
+            )
+        except Exception:
+            pass
 
     async def _check_and_pause_lower_priority(self, new_task_priority: float) -> None:
         """
@@ -372,7 +437,7 @@ class Orchestrator:
 
             # Log pause to episodic memory for CLARA's passive awareness
             try:
-                self._agent.db.add_episodic_log(
+                self._agent.log_system_episode(
                     f"[TASK PAUSED] '{tg_task.goal[:60]}' paused — "
                     f"higher-priority user request took over."
                 )
@@ -428,14 +493,34 @@ class Orchestrator:
             ctx = task.context
 
             if task.origin == "system":
-                # Background task — dispatch to background worker, not ReAct loop
-                from .background_tasks import run_background_task
-                result = await run_background_task(
-                    trigger_name=ctx.get("trigger", "unknown"),
-                    agent=self._agent,
-                    task_graph=self._task_graph,
-                    ctx=ctx,
-                )
+                trigger = ctx.get("trigger", "unknown")
+
+                # Known lightweight triggers use the fast background dispatch path.
+                # Unknown or complex triggers go through the full intelligence pipeline.
+                SIMPLE_TRIGGERS = {
+                    "memory_maintenance", "context_warmup", "health_check",
+                    "file_change", "memory_growth", "interaction_density",
+                }
+
+                if trigger in SIMPLE_TRIGGERS:
+                    from .background_tasks import run_background_task
+                    result = await run_background_task(
+                        trigger_name=trigger,
+                        agent=self._agent,
+                        task_graph=self._task_graph,
+                        ctx=ctx,
+                    )
+                else:
+                    # Complex system task — full intelligence pipeline
+                    goal = task.goal.replace(
+                        "[BACKGROUND] ", ""
+                    ).replace("[ENVIRONMENT] ", "")
+                    result = await self._agent.process_request(
+                        query=goal,
+                        source="system",
+                        task_context=ctx,
+                    )
+
                 # Log autonomous action to episodic memory
                 if result:
                     try:
@@ -444,16 +529,18 @@ class Orchestrator:
                             f"{task.goal.replace('[BACKGROUND] ', '').replace('[ENVIRONMENT] ', '')}"
                             f": {result[:200]}"
                         )
-                        self._agent.db.add_episodic_log(summary)
-                        slog.info("[Orchestrator] Autonomous action logged to episodic memory.")
+                        self._agent.log_system_episode(summary)
+                        slog.info("[Orchestrator] Autonomous action logged.")
                     except Exception as e:
-                        slog.error(f"[Orchestrator] Failed to log autonomous action: {e}")
+                        slog.error(f"[Orchestrator] Episodic log failed: {e}")
             else:
-                # User task — full ReAct loop
+                # User task — full pipeline via process_request
                 result = await self._agent.process_request(
                     query=ctx["text"],
                     image_data=ctx.get("image_data"),
                     on_step_update=ctx.get("on_step_update"),
+                    source="user",
+                    task_context=ctx,
                 )
 
             self._trace(

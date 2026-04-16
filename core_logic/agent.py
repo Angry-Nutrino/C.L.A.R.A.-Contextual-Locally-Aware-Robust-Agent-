@@ -1,15 +1,18 @@
 import re
 import json
 import asyncio
+import base64
+import threading
 import torch
-import heapq
 from sentence_transformers import SentenceTransformer
-import ollama as ollama_client
 from .tools import (
     run_python_code, web_search, get_time_date, consult_archive,
     fs_read_file, fs_list_directory, fs_write_file, fs_run_command,
     query_task_status,
 )
+from .system_prompt import SYSTEM_PROMPT, CHAT_SYSTEM_PROMPT, PERSONA
+from .bench_logger import Timer, log_request
+from .interpreter import interpret, TOOL_ARG_SCHEMAS
 from .memory_manager import free_gpu_memory
 # from .ears import listen_local
 # from .kokoro_mouth import speak
@@ -22,9 +25,35 @@ from .session_logger import slog
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 
+def route(interpreted: dict) -> str:
+    """
+    Decide execution mode from Interpreter output.
+    Returns "FAST", "CHAT", or "DELIBERATE".
+
+    FAST:       high confidence, low uncertainty, no planning needed,
+                tool is specified with complete args
+    CHAT:       high confidence, low uncertainty, no planning needed,
+                no tool needed — direct conversational response
+    DELIBERATE: anything else
+    """
+    if (
+        interpreted.get("requires_planning") is False
+        and interpreted.get("confidence", 0) >= 0.75
+        and interpreted.get("uncertainty", 1) <= 0.30
+    ):
+        if (
+            interpreted.get("tool") is not None
+            and interpreted.get("args") is not None
+        ):
+            return "FAST"
+        if interpreted.get("tool") is None:
+            return "CHAT"
+    return "DELIBERATE"
+
+
 class Clara_Agent:
     def __init__(self, model_name="phi3:mini"):
-        self.system_prompt = """
+        self.system_prompt = SYSTEM_PROMPT or """
 
 ### Role ###
 C.L.A.R.A.(Custom Local Aware Robust Agent)
@@ -45,7 +74,12 @@ You have access to the following tools:
 1. Python Repl: This tool is used to execute python code. To use the tool call : python_repl[your_python_code], Usage: python_repl[import math; print(len("hello"))], RULES: Use 'len(str)', NOT 'str.len()'. Use 'print()' to see output. Re-import libraries every time.
 2. Web Search: This tool is used to search anything on the web. To use the tool call : web_search["your_question"]
 3. Time and Date: This tool is used to find the Realtime Date and time. To use the tool call: date_time[]
-4. Vision Analysis: This tool analyzes the content of images. To use the tool call: vision_tool["Image_path","Your question about the image"]
+4. Vision Tool: Analyze one or more images from local disk.
+   Single image: [{"tool": "vision_tool", "query": "/path/to/image.png,What is in this?"}]
+   Multi-image: [{"tool": "vision_tool", "query": "/path/a.png,/path/b.png,Compare these images"}]
+   RULES: Use absolute paths. Separate multiple paths with commas before the question.
+   The last comma-separated segment is always the question.
+   Works with jpg, jpeg, png, gif, webp files.
 5. Consult Archive: This tool is used to look up the information at local archives. To use the tool call: consult_archive["your_question"]
 6. Read File: Read the contents of a local file on disk.
    Action: [{"tool": "fs_read_file", "query": "C:\\path\\to\\file.txt"}]
@@ -219,32 +253,16 @@ Treat this block as your long-term memory. You must:
         self.chat_history = ""
         self.db = crud()
         slog.info(f"Initializing Clara with model : {model_name}")
-        self.llm =None
-        #pre compute embeddings for tool selection
+        self.llm = None
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        slog.info(f"Loading MiniLM model for gatekeeping on {device}...")
-        self.miniLM= SentenceTransformer('all-MiniLM-L6-v2').to(device)
+        slog.info(f"Loading MiniLM model for episodic memory on {device}...")
+        self.miniLM = SentenceTransformer('all-MiniLM-L6-v2').to(device)
         self._miniLM_lock = asyncio.Lock()
+        self._vault_lock = threading.Lock()  # guards vault writes against concurrent memorize_episode calls
         self._event_loop = None  # set at first async call
-        self.tool_emb= self._build_tool_embeddings()
         self.episodic_embeddings = self._build_episodic_embeddings()
-        self.phi3_model = "phi3:mini"
-        ollama_client.chat(model=self.phi3_model, messages=[{"role": "user", "content": "hi"}])  # cold-start
-        slog.info("Gatekeeper loaded")
         self.load_clara(model_name)
         slog.info("Brain loaded")
-
-    def _build_tool_embeddings(self):
-        with open("core_logic/tool_descriptions.json") as f:
-            tools = json.load(f)
-        self.tool_names = [t["name"] for t in tools]
-        self.tool_meta = {t["name"]: t["description"] for t in tools}
-        embs = []
-        for tool in tools:
-            texts = [tool["description"]] + tool["sub_descriptions"]
-            embs.append(self.miniLM.encode(texts, convert_to_tensor=True))
-        return embs  # List of (N_subs, 384) tensors — ready for max-similarity
-
 
     def _build_episodic_embeddings(self) -> list:
         """
@@ -445,6 +463,17 @@ Treat this block as your long-term memory. You must:
         slog.error(f"JSON Parse Failed: {last_error} | Input: {original[:80]}...")
         return None
 
+    def log_system_episode(self, summary: str) -> None:
+        """
+        Write an autonomous/system episodic entry with a zero-vector embedding
+        to maintain episodic_embeddings sync with episodic_log.
+        System entries are filtered from retrieval ([AUTONOMOUS] prefix) so
+        the zero vector will never pollute semantic search results.
+        """
+        self.db.add_episodic_log(summary)
+        zero_emb = torch.zeros(384, dtype=torch.float32)  # MiniLM output dim
+        self.episodic_embeddings.append(zero_emb)
+
     def memorize_episode(self, chat_snapshot: str):
         """
         Dual-Layer Memory Processing:
@@ -461,11 +490,20 @@ Treat this block as your long-term memory. You must:
             "- Write the summary as a plain description of what was discussed and what happened. Example: 'Alkama asked about Galaxy S26 pricing in India. Clara searched and found base at ₹79,990.'\n"
             "- Do NOT mention internal system details: no 'CHAT mode', 'TASK mode', 'memory context block', 'gatekeeper', 'routing', or any technical pipeline terms.\n"
             "- Do NOT mention the prefix 'Now, execute this request:' — strip it and focus on what Alkama actually said.\n"
-            "- Keep the summary to 1-2 sentences focused purely on the content of the exchange.\n"
-            "- FACTS: Extract only new PERMANENT facts (names, preferences, project constraints, verified real-world info).\n\n"
+            "- Keep the summary to 1-2 sentences focused purely on the content of the exchange.\n\n"
+            "- FACTS: Extract only TRULY PERMANENT facts worth remembering forever. A fact qualifies if it is:\n"
+            "  * A personal attribute of Alkama (name, relationship, personality trait, confirmed preference)\n"
+            "  * A stable project decision or architectural constraint\n"
+            "  * A real-world fact about a person, place, or thing that won't change\n"
+            "  * Something Alkama explicitly stated as a standing preference or rule\n\n"
+            "- DO NOT extract as facts:\n"
+            "  * File paths, file counts, file sizes, screenshot metadata, directory listings\n"
+            "  * Timestamps, dates of events, or anything time-sensitive\n"
+            "  * Tool outputs or observations (web search results, command output)\n"
+            "  * Anything that could be stale within days or weeks\n\n"
             "Output ONLY a JSON object, no extra text:\n"
             "{ \"summary\": \"Alkama asked X. Clara did Y.\", \"facts\": [\"Alkama likes Z\"] }\n"
-            "If no new facts, leave 'facts' as []."
+            "If no permanent facts qualify, leave 'facts' as []."
         )
         
         try:
@@ -505,181 +543,139 @@ Treat this block as your long-term memory. You must:
             facts = data.get("facts", [])
             if facts and isinstance(facts, list) and len(facts) > 0:
                 slog.info(f"   [Memory] Found {len(facts)} permanent facts.")
-                existing_facts = self.db.memory.get("long_term", [])
-                existing_embs = self._encode_sync(existing_facts).to('cpu') if existing_facts else None
-                for fact in facts:
-                    fact_emb = self._encode_sync(fact).to('cpu')
-                    if existing_embs is not None:
-                        sims = torch.nn.functional.cosine_similarity(fact_emb.unsqueeze(0), existing_embs)
-                        if sims.max().item() >= 0.85:
-                            slog.info(f"   [Memory] Skipping duplicate fact (sim={sims.max().item():.2f}): {fact[:60]}")
+                with self._vault_lock:
+                    # Re-read inside the lock so concurrent threads see each other's writes
+                    existing_facts = list(self.db.memory.get("long_term", []))
+                    existing_embs = self._encode_sync(existing_facts).to('cpu') if existing_facts else None
+                    for fact in facts:
+                        # Fast path: exact string match (catches identical concurrent writes)
+                        if fact in existing_facts:
+                            slog.info(f"   [Memory] Skipping exact duplicate: {fact[:60]}")
                             continue
-                    self.db.add_long_term_fact(fact)
-                    if existing_embs is not None:
-                        existing_embs = torch.cat([existing_embs, fact_emb.unsqueeze(0)], dim=0)
-                    existing_facts.append(fact)
+                        fact_emb = self._encode_sync(fact).to('cpu')
+                        if existing_embs is not None:
+                            sims = torch.nn.functional.cosine_similarity(fact_emb.unsqueeze(0), existing_embs)
+                            if sims.max().item() >= 0.85:
+                                slog.info(f"   [Memory] Skipping near-duplicate (sim={sims.max().item():.2f}): {fact[:60]}")
+                                continue
+                        self.db.add_long_term_fact(fact)
+                        existing_facts.append(fact)
+                        if existing_embs is not None:
+                            existing_embs = torch.cat([existing_embs, fact_emb.unsqueeze(0)], dim=0)
+                        else:
+                            existing_embs = fact_emb.unsqueeze(0)
 
         except Exception as e:
             slog.error(f"   [Memory] Consolidation failed: {e}")
 
-    async def gatekeeper(self, final_prompt: str) -> dict:
-        # 1. Compute query embedding + cosine similarity against all tool sub_descriptions
-        q_emb = await self._encode(final_prompt, convert_to_tensor=True)
-        tool_scores = {}
-        for i, embs in enumerate(self.tool_emb):
-            cos_sims = torch.nn.functional.cosine_similarity(q_emb.unsqueeze(0), embs)
-            tool_scores[self.tool_names[i]] = cos_sims.max().item()
-
-        # 2. Top-2 selection via heapq
-        top2 = heapq.nlargest(2, tool_scores.items(), key=lambda x: x[1])
-        tool1_name, tool1_score = top2[0]
-        tool2_name, tool2_score = top2[1] if len(top2) > 1 else ("NONE", 0.0)
-        tool1_micro_desc = self.tool_meta[tool1_name]
-        tool_margin = tool1_score - tool2_score
-        slog.info(f">> [Gatekeeper] Top tools: {tool1_name} ({tool1_score:.2f}), {tool2_name} ({tool2_score:.2f}) | margin: {tool_margin:.2f}")
-
-        # 4. Build prompt for Phi3
-        if tool1_name == "NONE":
-            gatekeeper_prompt = (
-                f"User Query: '{final_prompt}'\n\n"
-                f"MiniLM top match: NONE (score: {tool1_score:.3f}) — "
-                f"general conversation, no tool needed.\n\n"
-                "OUTPUT FORMAT — output ONLY this XML block:\n"
-                "<analysis>\n"
-                "  <intent>CHAT</intent>\n"
-                "</analysis>"
-            )
-        else:
-            low_conf_note = (
-                "IMPORTANT: Score is below 0.36 (low confidence). "
-                "Set intent to CHAT unless the query clearly requires "
-                "research, computation, or real-world data lookup.\n\n"
-                if tool1_score < 0.36 else ""
-            )
-            gatekeeper_prompt = (
-                f"User Query: '{final_prompt}'\n\n"
-                f"Top MiniLM tool match: {tool1_name} "
-                f"({tool1_micro_desc}) — score: {tool1_score:.3f}\n\n"
-                + low_conf_note +
-                "ROUTING RULES:\n"
-                "- Score > 0.70: intent = TASK\n"
-                "- Score 0.36–0.70: intent = TASK\n"
-                "- Score < 0.36: intent = CHAT for greetings, opinions, "
-                "casual conversation. intent = TASK if query requires "
-                "research, analysis, or real-world factual information.\n"
-                "- Vague follow-ups with no specific subject "
-                "('it', 'that', 'again'): intent = CHAT\n\n"
-                "OUTPUT FORMAT — output ONLY this XML block:\n"
-                "<analysis>\n"
-                "  <intent>TASK or CHAT</intent>\n"
-                "</analysis>"
-            )
-
-        # 5. Invoke Phi3 mini via ollama chat API (stop sequence prevents runaway generation)
-        slog.info(">> [Gatekeeper] Asking Phi3 for routing decision...")
-
-        # 6. Parse XML — only intent needed
-        intent = "CHAT"
-
-        try:
-            response = ollama_client.chat(
-                model=self.phi3_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are an intent classifier. "
-                            "Output ONLY the XML block. "
-                            "No code fences, no explanations."
-                        ),
-                    },
-                    {"role": "user", "content": gatekeeper_prompt},
-                ],
-                options={"temperature": 0, "num_ctx": 1024, "stop": ["</analysis>"]},
-            )
-            raw_response = response["message"]["content"] + "</analysis>"
-            slog.info(f">> [Gatekeeper] Raw: {raw_response[:80]}...")
-
-            match = re.search(r"<analysis>.*?</analysis>", raw_response, re.DOTALL)
-            if match:
-                xml     = match.group(0)
-                i_match = re.search(r"<intent>(.*?)</intent>", xml)
-                intent  = i_match.group(1).strip() if i_match else "TASK"
-            else:
-                slog.warning(">> [Gatekeeper] No XML found. Defaulting to TASK.")
-                intent = "TASK"
-
-        except Exception as e:
-            slog.error(f">> [Gatekeeper] Phi3 failed ({e}). Defaulting to TASK.")
-            intent = "TASK"
-
-        slog.info(f">> [Gatekeeper] Intent: {intent}")
-
-        # 7. Prime self.llm — system prompt, memory (always), user request
-        self.llm.append(system(self.system_prompt))
-        slog.info(">> [Memory] Loading Soul from disk...")
-        mem_context = self.db.get_smart_context(final_prompt, q_emb.to('cpu'), self.episodic_embeddings)
-        self.llm.append(assistant(f"[MEMORY_CONTEXT_BLOCK]\n{mem_context}\n[/MEMORY_CONTEXT_BLOCK]"))
-        self.llm.append(user(f"Now, execute this request: {final_prompt}"))
-
-        return {"intent": intent}
-
-
-
-    async def process_request(self, query, image_data=None, on_step_update=None):
+    async def process_request(self, query, image_data=None, on_step_update=None,
+                               source="user", task_context=None):
         try:
             if self._event_loop is None:
                 self._event_loop = asyncio.get_running_loop()
-            slog.info(f"\n=== New Mission: {query} ===")
+            slog.info(f"\n=== New Mission [{source}]: {query[:80]} ===")
+
+            total_timer = Timer()   # starts now, covers full request
+
             final_prompt = query
             if image_data:
-                print("🖼️ Image received from Interface. Processing...")
                 try:
-                    import base64
-                    import os
-                    
+                    import uuid as _uuid_mod
                     if "," in image_data:
                         image_data = image_data.split(",")[1]
-                        
-                    image_path = "temp_interface_image.png"
-                    
+                    image_path = f"temp_image_{_uuid_mod.uuid4().hex[:8]}.png"
                     with open(image_path, "wb") as f:
                         f.write(base64.b64decode(image_data))
-                        
                     abs_path = os.path.abspath(image_path)
-                    final_prompt = f"{query} \n\n[SYSTEM: An image has been uploaded and saved at '{abs_path}'. If the user asks about it, use the 'vision' tool to analyze this file.]"
-                    
-                    print(f"   Saved to: {image_path}")
+                    final_prompt = (
+                        f"{query} \n\n[SYSTEM: An image has been uploaded and saved at "
+                        f"'{abs_path}'. If the user asks about it, use the 'vision' tool "
+                        f"to analyze this file.]"
+                    )
                 except Exception as e:
-                    print(f"   ❌ Failed to save image: {e}")
-            # Added basic formatting to history
-            # self.chat_history = self.system_prompt + f"\nUser: {query}\n"
-            routing = await self.gatekeeper(final_prompt)
-            intent = routing["intent"]
+                    slog.error(f"   Failed to save image: {e}")
 
+            # 1. Get memory context (always — feeds Interpreter)
+            q_emb = await self._encode(final_prompt, convert_to_tensor=True)
+            mem_context = self.db.get_smart_context(
+                final_prompt, q_emb.to('cpu'), self.episodic_embeddings
+            )
 
-            if intent == "TASK":
-                final_answer = await self.run_task(on_step_update=on_step_update)
+            # 2. Interpret
+            interp_timer = Timer()
+            interpreted = await interpret(
+                content=final_prompt,
+                source=source,
+                context=mem_context,
+                client=self.client,
+                task_context=task_context,
+            )
+            interp_ms = interp_timer.elapsed_ms()
+
+            # 3. Route
+            mode = route(interpreted)
+            slog.info(f">> [Router] Mode: {mode}")
+
+            # 4. Create a fresh LLM instance per request — isolates concurrent tasks
+            #    Model selection by mode:
+            #    CHAT:      non-reasoning — ~0.5s TTFT vs 3-8s for reasoning; no planning needed
+            #    DELIBERATE: reasoning — ReAct loop quality requires it
+            #    FAST:      reasoning (consolidation-only; model matters less here)
+            if mode == "CHAT":
+                llm = self.client.chat.create(model="grok-4-1-fast-non-reasoning")
             else:
-                final_answer = await self.run_chat(on_step_update=on_step_update)
+                llm = self.client.chat.create(model="grok-4-1-fast-reasoning")
 
-            # 6. SPEAK RESULT
-            # 7. THE MEMORIZER
-            # chat_snapshot = "\n".join([f"{m.role}: {m.content}" for m in self.llm.messages if m.role != 'system'])\
-            # Grok uses numbers instead of strings for roles. 1 is user, 2 is assistant, 3 is system. We want to exclude system messages.
+            if mode == "DELIBERATE":
+                llm.append(system(self.system_prompt))
+
+            elif mode == "CHAT":
+                llm.append(system(CHAT_SYSTEM_PROMPT))
+
+            # FAST: no system prompt appended — llm is consolidation-only
+
+            llm.append(assistant(
+                f"[MEMORY_CONTEXT_BLOCK]\n{mem_context}\n[/MEMORY_CONTEXT_BLOCK]"
+            ))
+            llm.append(user(f"Now, execute this request: {final_prompt}"))
+
+            # 5. Execute
+            exec_timer = Timer()
+            if mode == "FAST":
+                final_answer = await self._run_fast(interpreted, on_step_update, llm)
+            elif mode == "CHAT":
+                final_answer = await self._run_chat(llm, on_step_update)
+            else:
+                final_answer = await self.run_task(on_step_update=on_step_update, llm=llm)
+            exec_ms = exec_timer.elapsed_ms()
+
+            # 6. Benchmark log (user requests only — skip system/background noise)
+            if source == "user":
+                log_request(
+                    mode=mode,
+                    tool=interpreted.get("tool"),
+                    total_ms=total_timer.elapsed_ms(),
+                    interp_ms=interp_ms,
+                    exec_ms=exec_ms,
+                    query=query,
+                )
+
+            # 6. Memory consolidation
             chat_snapshot = "\n".join([
-                f"{'User' if str(m.role) == '1' else 'Clara'}: {m.content}" 
-                for m in self.llm.messages 
+                f"{'User' if str(m.role) == '1' else 'Clara'}: {m.content}"
+                for m in llm.messages
                 if str(m.role) not in ['3', 'system']
                 and "[MEMORY_CONTEXT_BLOCK]" not in m.content
             ])
-            task = asyncio.create_task(asyncio.to_thread(self.memorize_episode, chat_snapshot))
+            mem_task = asyncio.create_task(
+                asyncio.to_thread(self.memorize_episode, chat_snapshot)
+            )
             def _on_memorize_done(t):
                 if not t.cancelled() and t.exception():
-                    slog.error(f"   [Memory] memorize_episode task failed: {t.exception()}")
-            task.add_done_callback(_on_memorize_done)
-            # Re-intializing Clara's brain to clear the context from the brain
-            self.llm = self.client.chat.create(model="grok-4-1-fast-reasoning")
+                    slog.error(
+                        f"   [Memory] memorize_episode failed: {t.exception()}"
+                    )
+            mem_task.add_done_callback(_on_memorize_done)
 
             return final_answer
 
@@ -687,7 +683,168 @@ Treat this block as your long-term memory. You must:
             slog.error(f"   [process_request] Unhandled error: {e}")
             return f"I encountered an internal error: {e}"
 
-    def run(self, direct_input=None, image_data=None) -> str:
+    async def _run_fast(self, interpreted: dict, on_step_update=None, llm=None) -> str:
+        """
+        FAST_EXECUTION: execute the Interpreter-specified tool directly,
+        or respond conversationally when tool is None.
+        On any failure, escalate to DELIBERATE_EXECUTION (run_task).
+        """
+        tool_name = interpreted.get("tool")
+        args      = interpreted.get("args", {})
+        intent    = interpreted.get("intent", "")
+
+        try:
+            tool_result = None
+            if tool_name is not None:
+                slog.info(f">> [FAST] tool={tool_name} args={str(args)[:80]}")
+                if on_step_update:
+                    await on_step_update(f"Running {tool_name}...", type="status")
+                tool_result = await self._execute_fast_tool(tool_name, args)
+                if tool_result.startswith("Error"):
+                    raise ValueError(tool_result)
+
+            # Format response with non-reasoning model for speed
+            format_llm = self.client.chat.create(model="grok-4-1-fast-non-reasoning")
+            format_llm.append(system(
+                PERSONA + "\n\n---\n\n"
+                "Format the tool result into a natural response. "
+                "Do not mention tool names or pipeline details."
+            ))
+            prompt_parts = [f"Request: {intent}"]
+            if tool_result:
+                prompt_parts.append(f"Tool result: {tool_result}")
+            format_llm.append(user("\n".join(prompt_parts)))
+
+            response = format_llm.sample().content
+            format_llm = None
+            slog.info(f">> [FAST] Response:\n{response}")
+            if on_step_update:
+                await on_step_update(response, type="stream", turn_id=0)
+
+            # Append to request-local LLM for memory consolidation
+            if llm is not None:
+                llm.append(assistant(response))
+            return response
+
+        except Exception as e:
+            slog.warning(f">> [FAST] Failed ({e}). Escalating to DELIBERATE.")
+            if on_step_update:
+                await on_step_update("Thinking more carefully...", type="status")
+
+            # Build failure context for DELIBERATE — tell it what was attempted,
+            # what result was obtained (if any), and why it failed.
+            # This prevents DELIBERATE from blindly repeating the same approach.
+            failure_parts = [
+                "[FAST_EXECUTION_FAILED]",
+                f"Tool attempted: {tool_name}",
+                f"Args: {args}",
+                f"Error: {e}",
+            ]
+            if tool_result is not None:
+                # FAST got a result but something downstream failed (e.g. format_llm)
+                # Give DELIBERATE the raw data so it doesn't re-fetch
+                failure_parts.append(
+                    f"Partial result obtained before failure:\n{str(tool_result)[:1000]}"
+                )
+            failure_parts.append(
+                "Reason through the failure and do not repeat the same thing. "
+                "Use the partial result if available. "
+                "Reason through an alternative if not."
+            )
+            failure_note = "\n".join(failure_parts)
+
+            if llm is not None:
+                llm.append(assistant(failure_note))
+
+            return await self.run_task(on_step_update=on_step_update, llm=llm)
+
+    async def _run_chat(self, llm, on_step_update=None) -> str:
+        """
+        CHAT_EXECUTION: direct conversational response with no tool loop.
+        Streams tokens straight to the UI. Used when Interpreter returns tool=None
+        and requires_planning=False — e.g. greetings, follow-up questions, opinions.
+        """
+        slog.info(">> [CHAT] Direct conversational response.")
+        raw = ""
+        sent_len = 0
+        for _, chunk in llm.stream():
+            token = chunk.content
+            if not token:
+                continue
+            raw += token
+            if on_step_update:
+                await on_step_update(token, type="stream", turn_id=1)
+                sent_len += len(token)
+                await asyncio.sleep(0.01)
+        response = raw.strip()
+        slog.info(f">> [CHAT] Response:\n{response}")
+        llm.append(assistant(response))
+        return response
+
+    async def _execute_fast_tool(self, tool_name: str, args: dict) -> str:
+        """
+        Execute a single tool with structured args from the Interpreter.
+        Returns string result or "Error: ..." string on failure.
+        """
+        try:
+            if tool_name == "web_search":
+                res = await asyncio.to_thread(web_search, args.get("query", ""))
+                return res.get("answer", "No results found.")
+
+            elif tool_name == "python_repl":
+                return await asyncio.to_thread(run_python_code, args.get("code", ""))
+
+            elif tool_name == "date_time":
+                return await asyncio.to_thread(get_time_date)
+
+            elif tool_name == "consult_archive":
+                return await asyncio.to_thread(consult_archive, args.get("query", ""))
+
+            elif tool_name == "fs_read_file":
+                return await asyncio.to_thread(fs_read_file, args.get("path", ""))
+
+            elif tool_name == "fs_list_directory":
+                return await asyncio.to_thread(fs_list_directory, args.get("path", ""))
+
+            elif tool_name == "fs_write_file":
+                return await asyncio.to_thread(
+                    fs_write_file,
+                    args.get("path", ""),
+                    args.get("content", "")
+                )
+
+            elif tool_name == "fs_run_command":
+                return await asyncio.to_thread(fs_run_command, args.get("command", ""))
+
+            elif tool_name == "query_task_status":
+                return await asyncio.to_thread(
+                    query_task_status, args.get("keyword", "")
+                )
+
+            elif tool_name == "vision_tool":
+                from .tools import analyze_image_grok, _xai_client_ref
+                path = args.get("path", "")
+                result = await asyncio.to_thread(
+                    analyze_image_grok,
+                    _xai_client_ref,
+                    path,
+                    args.get("question", "Describe this image.")
+                )
+                if "temp_image_" in path:
+                    try:
+                        import pathlib
+                        pathlib.Path(path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                return result
+
+            else:
+                return f"Error: Unknown tool '{tool_name}'"
+
+        except Exception as e:
+            return f"Error: {e}"
+
+    # def run(self, direct_input=None, image_data=None) -> str:
         """
         Main Loop: Now Powered by Ears 👂 (Async Wrapper Version)
         """
@@ -697,14 +854,12 @@ Treat this block as your long-term memory. You must:
             if image_data:
                 print("🖼️ Image received from Interface. Processing...")
                 try:
-                    import base64
-                    import os
-                    
+                    import uuid as _uuid_mod
                     if "," in image_data:
                         image_data = image_data.split(",")[1]
-                        
-                    image_path = "temp_interface_image.png"
-                    
+
+                    image_path = f"temp_image_{_uuid_mod.uuid4().hex[:8]}.png"
+
                     with open(image_path, "wb") as f:
                         f.write(base64.b64decode(image_data))
                         
@@ -775,100 +930,58 @@ Treat this block as your long-term memory. You must:
                         break
                 
                 
-                    
             
-            
-    async def run_chat(self, on_step_update=None):
-        slog.info(">> [Mode] Chatting (Streaming)...")
-        if on_step_update:
-            await on_step_update("Thinking...", type="status")
-
-        self.llm.append(user(
-            "[SYSTEM MODE: CHAT] You are in direct conversation mode. "
-            "You do NOT have access to any tools. Do NOT output Thought, Action, or Observation blocks. "
-            "Respond naturally and directly. Your entire response is the Final Answer."
-        ))
-
-        raw_content = ""
-        answer_sent_len = 0
-        
-        # 1. Open the Live Pipe (Native xai_sdk syntax)
-        for response_obj, chunk in self.llm.stream():
-            token = chunk.content
-            if not token:
-                continue
-                
-            raw_content += token
-
-            # Stream tokens directly — CHAT mode responds without ReAct format
-            new_chars = raw_content[answer_sent_len:]
-            if new_chars and on_step_update:
-                await on_step_update(new_chars, type="stream", turn_id=0)
-                answer_sent_len += len(new_chars)
-
-        # 2. Stream Complete. Clean up.
-        await asyncio.sleep(0.05) 
-        
-        response_text = raw_content.strip()
-        slog.info(f"Clara (Chat): {response_text[:300]}{'...' if len(response_text) > 300 else ''}")
-        
-        # 3. Append to internal memory
-        self.llm.append(assistant(response_text))
-        
-        if "Final Answer:" in response_text:
-            return response_text.split("Final Answer:")[-1].strip()
-            
-        return response_text
-
-    async def run_task(self, on_step_update=None):
-        self.llm.append(user(
+    async def run_task(self, on_step_update=None, llm=None):
+        if llm is None:
+            llm = self.llm
+        llm.append(user(
             "[SYSTEM MODE: TASK] You are in agent task mode. "
             "Available tools: python_repl, web_search, date_time, vision_tool, consult_archive. "
             "Follow the Thought → Action → Observation loop strictly."
         ))
         turn_count = 0
         max_turns = 8
-        
+
         while turn_count < max_turns:
             turn_count += 1
             slog.info(f"[Loop {turn_count}] Thinking (Streaming)...")
-            
+
             raw_content = ""
             answer_sent_len = 0
-            
+
             # 1. Open the Live Pipe (Native xai_sdk syntax)
-            for response_obj, chunk in self.llm.stream():
+            for response_obj, chunk in llm.stream():
                 token = chunk.content
                 if not token:
                     continue
-                    
+
                 raw_content += token
-                
+
                 # STATE C: The user-facing answer.
                 if "Final Answer:" in raw_content:
                     start_idx = raw_content.find("Final Answer:") + 13
                     current_answer = raw_content[start_idx:]
-                    
+
                     # Only send the NEW characters
                     new_chars = current_answer[answer_sent_len:]
                     if new_chars and on_step_update:
                         await on_step_update(new_chars, type="stream", turn_id=turn_count)
                         answer_sent_len += len(new_chars)
                         await asyncio.sleep(0.02)
-                        
+
                 # STATE B: The code.
                 elif "Action:" in raw_content:
-                    pass 
-                    
+                    pass
+
                 # STATE A: The internal monologue.
                 elif "Thought:" in raw_content:
                     start_idx = raw_content.find("Thought:") + 8
                     current_thought = raw_content[start_idx:].strip()
                     clean_thought = re.split(r'\n?(?:Action|Final Answer|Observation):?', current_thought)[0].strip()
-                    
+
                     if current_thought and on_step_update:
                         await on_step_update(clean_thought, type="thought", turn_id=turn_count)
-            
+
             await asyncio.sleep(0.05)  # Small delay to simulate thinking time and allow UI to update
 
             if "Observation:" in raw_content:
@@ -877,11 +990,13 @@ Treat this block as your long-term memory. You must:
             else:
                 response_text = raw_content.strip()
 
-            slog.info(f"Clara (Task turn {turn_count}): {response_text[:300]}{'...' if len(response_text) > 300 else ''}")
-            self.llm.append(assistant(response_text))
+            slog.info(f"Clara (Task turn {turn_count}):\n{response_text}")
+            llm.append(assistant(response_text))
 
             if "Final Answer:" in response_text:
-                return response_text.split("Final Answer:")[-1].strip()
+                final = response_text.split("Final Answer:")[-1].strip()
+                slog.info(f">> [DELIBERATE] Final Answer:\n{final}")
+                return final
 
             # Parse all actions
             actions = self.parse_actions(response_text)
@@ -915,10 +1030,19 @@ Treat this block as your long-term memory. You must:
                             return await asyncio.to_thread(consult_archive, tool_input)
                         elif tool_name == "vision_tool":
                             parts = tool_input.split(",", 1)
-                            path = parts[0].strip().strip('"').strip("'")
-                            query = parts[1].strip().strip('"').strip("'") if len(parts) > 1 else "Describe this."
-                            from .sight import analyze_image
-                            return await asyncio.to_thread(analyze_image, path, query)
+                            path  = parts[0].strip().strip('"').strip("'")
+                            query = parts[1].strip() if len(parts) > 1 else "Describe this image."
+                            from .tools import analyze_image_grok, _xai_client_ref
+                            result = await asyncio.to_thread(
+                                analyze_image_grok, _xai_client_ref, path, query
+                            )
+                            if "temp_image_" in path:
+                                try:
+                                    import pathlib
+                                    pathlib.Path(path).unlink(missing_ok=True)
+                                except Exception:
+                                    pass
+                            return result
                         elif tool_name == "fs_read_file":
                             return await asyncio.to_thread(fs_read_file, tool_input)
                         elif tool_name == "fs_list_directory":
@@ -947,9 +1071,9 @@ Treat this block as your long-term memory. You must:
 
                 # Feed all observations back as a single combined message
                 combined_observation = "\n".join(observations)
-                self.llm.append(user(combined_observation))
+                llm.append(user(combined_observation))
 
             else:
-                self.llm.append(user("System: No valid Action found. Please continue."))
+                llm.append(user("System: No valid Action found. Please continue."))
 
         return "I ran out of steps."

@@ -21,8 +21,9 @@ from core_logic.orchestrator import Orchestrator
 from core_logic.background_tasks import BackgroundScheduler
 from core_logic.environment import EnvironmentWatcher
 from core_logic.tracer import Tracer
-from core_logic.tools import set_task_graph
+from core_logic.tools import set_task_graph, set_xai_client
 from core_logic.session_logger import init_session_log, slog
+from core_logic.bench_logger import init_bench_log, close_bench_log
 
 # Start session log before anything else
 init_session_log()
@@ -35,6 +36,7 @@ orchestrator: Orchestrator | None = None
 scheduler: BackgroundScheduler | None = None
 env_watcher: EnvironmentWatcher | None = None
 tracer: Tracer | None = None
+active_connections: set = set()  # live WebSocket connections — used for speaking_start/stop broadcast
 
 
 @asynccontextmanager
@@ -43,9 +45,13 @@ async def lifespan(app: FastAPI):
 
     # Startup
     slog.info("[API] Starting CLARA system...")
+    init_bench_log("benchmarks")
+    slog.info("[API] Benchmark logger initialized.")
     tracer = Tracer(enabled=True, traces_dir="traces")
     slog.info("[API] Tracer initialized.")
     clara = Clara_Agent()
+    set_xai_client(clara.client)
+    slog.info("[API] xAI client reference injected into tools.")
     task_graph = TaskGraph()
     set_task_graph(task_graph)
     slog.info("[API] TaskGraph reference injected into tools.")
@@ -70,6 +76,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     slog.info("[API] Shutting down CLARA system...")
+    close_bench_log()
     await env_watcher.stop()
     slog.info("[API] EnvironmentWatcher stopped.")
     await scheduler.stop()
@@ -92,6 +99,7 @@ app.add_middleware(
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
+    active_connections.add(websocket)
 
     async def send_update(content: str, type="thought",
                           turn_id=None, message_id=None):
@@ -153,6 +161,7 @@ async def websocket_endpoint(websocket: WebSocket):
             )
 
     except WebSocketDisconnect:
+        active_connections.discard(websocket)
         slog.info("[API] Client disconnected.")
 
 

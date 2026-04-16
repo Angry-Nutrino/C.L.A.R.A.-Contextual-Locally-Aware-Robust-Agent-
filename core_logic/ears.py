@@ -1,67 +1,49 @@
-import speech_recognition as sr
-from faster_whisper import WhisperModel
-import os
+"""
+ears.py — STT thin wrapper.
+Delegates entirely to VoiceCoordinator (core_logic/voice.py).
+VoiceCoordinator is created and loaded by api.py at startup.
+This file contains NO model loading, NO blocking calls.
 
-# 1. Load the Local Model (Download happens once)
-# "base.en" is fast and accurate enough. Use "small.en" if you want higher accuracy.
-# device="cpu" is safest for now. Change to "cuda" later if you have an NVIDIA GPU setup.
-print("--- 🧠 Loading Local Whisper Model... ---")
-model = WhisperModel("medium.en", device="cuda", compute_type="int8")
-print("--- ✅ Model Loaded! ---")
+Legacy _cli_listen() preserved at bottom for CLI testing only —
+it requires manual instantiation and is never called by the system.
+"""
+from .session_logger import slog
 
-def get_dynamic_mic_index(target_name_substring):
+
+def listen_push_to_talk() -> str | None:
     """
-    Scans for a microphone that contains the target_name_substring.
-    Returns the Index ID if found, otherwise returns None (Default Mic).
+    Called after push-to-talk key released (voice_stop WebSocket event).
+    Delegates to VoiceCoordinator.stop_recording() via api.py.
+    Returns transcribed text or None.
+
+    NOTE: In the WebSocket flow, stop_recording_async() is called directly
+    on the VoiceCoordinator instance from api.py — this function is a
+    reference shim for any non-WebSocket callers.
     """
-    print(f"--- 🕵️ Scanning for mic: '{target_name_substring}'... ---")
-    mics = sr.Microphone.list_microphone_names()
-    
-    for index, name in enumerate(mics):
-        # Case-insensitive check
-        if target_name_substring.lower() in name.lower():
-            print(f"✅ Found '{name}' at Index {index}")
-            return index
-            
-    print(f"❌ Warning: '{target_name_substring}' not found. Using Default Mic.")
-    return None # Lets SpeechRecognition pick the system default
+    try:
+        from .voice import get_voice
+        v = get_voice()
+        if v is None:
+            slog.warning("[ears] VoiceCoordinator not loaded.")
+            return None
+        return v.stop_recording()
+    except Exception as e:
+        slog.error(f"[ears] listen_push_to_talk failed: {e}")
+        return None
 
-def listen_local()-> str:
-    recognizer = sr.Recognizer()
-    
-    # Use your working Index 4\
-    mic= get_dynamic_mic_index("Microphone Array (Realtek(R)")
-    with sr.Microphone(device_index=mic) as source:
-        print("--- 🔇 Adjusting noise... ---")
-        recognizer.adjust_for_ambient_noise(source, duration=0.5)
-        print("--- 👂 Listening (Local)... Speak now! ---")
-        recognizer.pause_threshold = 1.3  # Seconds of silence before considering speech complete
-        
-        try:
-            # Capture audio
-            audio = recognizer.listen(source, timeout=8, phrase_time_limit=15)
-            
-            # Save temporary file (Whisper needs a file, not a stream)
-            with open("temp_command.wav", "wb") as f:
-                f.write(audio.get_wav_data())
-            
-            # Transcribe locally
-            segments, info = model.transcribe("temp_command.wav", beam_size=5)
-            
-            full_text = ""
-            for segment in segments:
-                full_text += segment.text
-                
-            print(f"✅ CLARA Heard: {full_text.strip()}")
-            
-            # Cleanup
-            os.remove("temp_command.wav")
-            return full_text.strip()
 
-        except sr.WaitTimeoutError:
-            print("❌ Silence.")
-        except Exception as e:
-            print(f"❌ Error: {e}")
-
-if __name__ == "__main__":
-    listen_local()
+# ── Legacy CLI test (never called by the system) ─────────────────────────
+# To test STT manually from terminal:
+#   from core_logic.ears import _cli_listen
+#   text = _cli_listen()
+def _cli_listen() -> str | None:
+    """Manual CLI test only. Requires VoiceCoordinator to be loaded first."""
+    from .voice import get_voice
+    v = get_voice()
+    if v is None:
+        print("[ears] VoiceCoordinator not loaded. Cannot listen.")
+        return None
+    input("Press Enter to start recording...")
+    v.start_recording()
+    input("Press Enter to stop recording...")
+    return v.stop_recording()

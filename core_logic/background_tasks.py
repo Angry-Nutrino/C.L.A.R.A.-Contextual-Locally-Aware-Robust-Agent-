@@ -145,16 +145,43 @@ async def _memory_maintenance(agent) -> str:
 
 async def _context_warmup(agent) -> str:
     """
-    Verify episodic embeddings are in sync with episodic log. Observation only in Phase 5.
+    Verify episodic embeddings are in sync with episodic log.
+    If out of sync, re-encodes all summaries to restore alignment.
     """
-    episode_count   = len(agent.db.memory.get("episodic_log", []))
-    embedding_count = len(agent.episodic_embeddings)
-    in_sync = episode_count == embedding_count
+    ep_count  = len(agent.db.memory.get("episodic_log", []))
+    emb_count = len(agent.episodic_embeddings)
+    in_sync   = (ep_count == emb_count)
+
+    if not in_sync:
+        slog.warning(
+            f"[BG:context_warmup] Out of sync: {ep_count} episodes, "
+            f"{emb_count} embeddings. Re-encoding all..."
+        )
+        try:
+            summaries = [
+                ep.get("summary", "")
+                for ep in agent.db.memory.get("episodic_log", [])
+            ]
+            if summaries:
+                embs = agent._encode_sync(summaries)
+                if embs.dim() == 2:
+                    agent.episodic_embeddings = [embs[i].to('cpu') for i in range(len(summaries))]
+                else:
+                    agent.episodic_embeddings = [embs.to('cpu')]
+            slog.info(
+                f"[BG:context_warmup] Re-sync complete. "
+                f"{len(agent.episodic_embeddings)} embeddings."
+            )
+            return f"Re-synced {len(summaries)} embeddings."
+        except Exception as e:
+            slog.error(f"[BG:context_warmup] Re-sync failed: {e}")
+            return f"Re-sync failed: {e}"
+
     slog.info(
-        f"[BG:context_warmup] Episodes: {episode_count} | "
-        f"Embeddings: {embedding_count} | In sync: {in_sync}"
+        f"[BG:context_warmup] Episodes: {ep_count} | "
+        f"Embeddings: {emb_count} | In sync: True"
     )
-    return f"Context warmup: {embedding_count}/{episode_count} embeddings in sync."
+    return f"Episodes: {ep_count} | Embeddings: {emb_count} | In sync: True"
 
 
 async def _handle_file_change(ctx: dict) -> str:
