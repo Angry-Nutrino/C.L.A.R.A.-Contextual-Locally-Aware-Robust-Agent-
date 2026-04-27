@@ -8,7 +8,7 @@ from sentence_transformers import SentenceTransformer
 from .tools import (
     run_python_code, web_search, get_time_date, consult_archive,
     fs_read_file, fs_list_directory, fs_write_file, fs_run_command,
-    query_task_status,
+    query_task_status, get_archive_context,
 )
 from .system_prompt import SYSTEM_PROMPT, CHAT_SYSTEM_PROMPT, PERSONA
 from .bench_logger import Timer, log_request
@@ -22,6 +22,8 @@ from xai_sdk import Client
 from xai_sdk.chat import user, system, assistant
 from .crud import crud
 from .session_logger import slog
+from .tool_executor import execute_deliberate, execute_fast
+from .tool_registry import format_tool_schemas_for_context
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 
@@ -93,9 +95,9 @@ You have access to the following tools:
    Creates parent directories automatically if they do not exist.
    IMPORTANT: This is a full overwrite. If the file already exists and you are modifying or appending to it, you MUST use fs_read_file first to get the existing content, then write the complete new content.
 9. Run Command: Execute a shell command (PowerShell on Windows).
-   Action: [{"tool": "fs_run_command", "query": "dir C:\\Users"}]
-   RULES: Prefer fs_read_file and fs_list_directory when possible.
-   Use fs_run_command only when those tools are insufficient.
+   Action: [{"tool": "start_process", "query": "dir C:\\Users"}]
+   RULES: Prefer read_file and list_directory when possible.
+   Use start_process only when those tools are insufficient.
 10. Query Task Status: Look up the status of any task — find out
     why it is pending, paused, failed, or what is blocking it.
     Action: [{"tool": "query_task_status", "query": "keyword from task goal"}]
@@ -262,6 +264,8 @@ Treat this block as your long-term memory. You must:
         self._event_loop = None  # set at first async call
         self.episodic_embeddings = self._build_episodic_embeddings()
         self.load_clara(model_name)
+        self.tool_registry = None   # injected from api.py after startup
+        self.mcp_client = None      # injected from api.py after startup
         slog.info("Brain loaded")
 
     def _build_episodic_embeddings(self) -> list:
@@ -328,11 +332,16 @@ Treat this block as your long-term memory. You must:
         Returns [] only if absolutely no action is found.
         Each failed extraction is represented as {"tool": None, "query": None, "error": "reason"}.
         """
-        VALID_TOOLS = {
-            "web_search", "python_repl", "date_time", "vision_tool",
-            "consult_archive", "fs_read_file", "fs_list_directory",
-            "fs_write_file", "fs_run_command", "query_task_status",
-        }
+        # Build VALID_TOOLS dynamically from the registry so all MCP tools
+        # and tool_search are always included without manual maintenance.
+        # Falls back to core native set if registry is not yet available.
+        if self.tool_registry and self.tool_registry.is_ready:
+            VALID_TOOLS = set(self.tool_registry._tools.keys()) | {"tool_search"}
+        else:
+            VALID_TOOLS = {
+                "web_search", "python_repl", "date_time", "vision_tool",
+                "consult_archive", "query_task_status", "tool_search",
+            }
 
         # ── Locate "Action:" in the output ────────────────────────────────────────
         action_match = re.search(r"Action:\s*", llm_output)
@@ -425,8 +434,15 @@ Treat this block as your long-term memory. You must:
                 result.append({"tool": None, "query": None, "error": f"Unknown tool: '{tool}'"})
                 continue
 
-            # date_time is valid with empty query
-            if not query and tool != "date_time":
+            # Allow empty query for no-arg tools. Check schema via registry.
+            is_no_arg_tool = False
+            if self.tool_registry and self.tool_registry.is_ready:
+                schema = self.tool_registry.get_schema(tool)
+                if schema:
+                    required = schema.get("inputSchema", {}).get("required", [])
+                    is_no_arg_tool = len(required) == 0
+
+            if not query and not is_no_arg_tool:
                 result.append({"tool": None, "query": None, "error": f"Empty query for tool '{tool}'"})
                 continue
 
@@ -597,16 +613,65 @@ Treat this block as your long-term memory. You must:
 
             # 1. Get memory context (always — feeds Interpreter)
             q_emb = await self._encode(final_prompt, convert_to_tensor=True)
+            q_emb_cpu = q_emb.to('cpu')
             mem_context = self.db.get_smart_context(
-                final_prompt, q_emb.to('cpu'), self.episodic_embeddings
+                final_prompt, q_emb_cpu, self.episodic_embeddings
             )
+
+            # 1b. Conditional archive context — same embedding, no extra MiniLM call
+            archive_context = await asyncio.to_thread(
+                get_archive_context, q_emb_cpu, final_prompt
+            )
+            if archive_context:
+                slog.info(f"   [Archive] Context injected ({len(archive_context)} chars)")
+
+            # Dynamic tool discovery — inject relevant schemas before Interpreter
+            tool_context = ""
+            if self.tool_registry and self.tool_registry.is_ready:
+                discovered = self.tool_registry.search(q_emb_cpu, top_k=8)
+
+                # Mandatory injection: cosine similarity cannot reliably detect
+                # enumeration intent (query describes target, not operation).
+                # Guarantee list_directory and start_search are present for
+                # any query that implies finding or listing files.
+                ENUMERATION_KEYWORDS = (
+                    "find", "list", "all", "search", "what files", "which files",
+                    "show files", "directory", "folder", "files in", "images in",
+                    "locate", "where is", "enumerate"
+                )
+                query_lower = final_prompt.lower()
+                if any(kw in query_lower for kw in ENUMERATION_KEYWORDS):
+                    discovered_names = {s.get("name") for s in discovered}
+                    ld_schema = self.tool_registry.get_schema("list_directory")
+                    ss_schema = self.tool_registry.get_schema("start_search")
+                    if ld_schema and "list_directory" not in discovered_names:
+                        discovered.append(ld_schema)
+                        slog.info("   [Registry] Mandatory injection: list_directory")
+                    if ss_schema and "start_search" not in discovered_names:
+                        discovered.append(ss_schema)
+                        slog.info("   [Registry] Mandatory injection: start_search")
+
+                if discovered:
+                    tool_context = format_tool_schemas_for_context(discovered)
+                    slog.info(
+                        f"   [Registry] Injecting {len(discovered)} discovered tools."
+                    )
+                    slog.debug(
+                        f">> [DISCOVERED_TOOLS] Full context injected to Interpreter:\n{tool_context}"
+                    )
+
+            full_context = mem_context
+            if archive_context:
+                full_context += "\n" + archive_context
+            if tool_context:
+                full_context += tool_context
 
             # 2. Interpret
             interp_timer = Timer()
             interpreted = await interpret(
                 content=final_prompt,
                 source=source,
-                context=mem_context,
+                context=full_context,
                 client=self.client,
                 task_context=task_context,
             )
@@ -635,7 +700,7 @@ Treat this block as your long-term memory. You must:
             # FAST: no system prompt appended — llm is consolidation-only
 
             llm.append(assistant(
-                f"[MEMORY_CONTEXT_BLOCK]\n{mem_context}\n[/MEMORY_CONTEXT_BLOCK]"
+                f"[MEMORY_CONTEXT_BLOCK]\n{full_context}\n[/MEMORY_CONTEXT_BLOCK]"
             ))
             llm.append(user(f"Now, execute this request: {final_prompt}"))
 
@@ -705,14 +770,27 @@ Treat this block as your long-term memory. You must:
 
             # Format response with non-reasoning model for speed
             format_llm = self.client.chat.create(model="grok-4-1-fast-non-reasoning")
-            format_llm.append(system(
-                PERSONA + "\n\n---\n\n"
-                "Format the tool result into a natural response. "
-                "Do not mention tool names or pipeline details."
-            ))
-            prompt_parts = [f"Request: {intent}"]
-            if tool_result:
-                prompt_parts.append(f"Tool result: {tool_result}")
+            if tool_name == "vision_tool":
+                # Vision responses must describe ONLY what is visually present.
+                # Passing intent (derived from full_context including memory) causes
+                # memory details to bleed into the image description.
+                format_llm.append(system(
+                    PERSONA + "\n\n---\n\n"
+                    "Describe ONLY what you can see in the image analysis result. "
+                    "Do not reference session history, memory, or prior conversations. "
+                    "Do not mention tool names or pipeline details. "
+                    "The image analysis result is the sole source of truth."
+                ))
+                prompt_parts = [f"Image analysis result: {tool_result}"]
+            else:
+                format_llm.append(system(
+                    PERSONA + "\n\n---\n\n"
+                    "Format the tool result into a natural response. "
+                    "Do not mention tool names or pipeline details."
+                ))
+                prompt_parts = [f"Request: {intent}"]
+                if tool_result:
+                    prompt_parts.append(f"Tool result: {tool_result}")
             format_llm.append(user("\n".join(prompt_parts)))
 
             response = format_llm.sample().content
@@ -782,67 +860,10 @@ Treat this block as your long-term memory. You must:
         return response
 
     async def _execute_fast_tool(self, tool_name: str, args: dict) -> str:
-        """
-        Execute a single tool with structured args from the Interpreter.
-        Returns string result or "Error: ..." string on failure.
-        """
-        try:
-            if tool_name == "web_search":
-                res = await asyncio.to_thread(web_search, args.get("query", ""))
-                return res.get("answer", "No results found.")
-
-            elif tool_name == "python_repl":
-                return await asyncio.to_thread(run_python_code, args.get("code", ""))
-
-            elif tool_name == "date_time":
-                return await asyncio.to_thread(get_time_date)
-
-            elif tool_name == "consult_archive":
-                return await asyncio.to_thread(consult_archive, args.get("query", ""))
-
-            elif tool_name == "fs_read_file":
-                return await asyncio.to_thread(fs_read_file, args.get("path", ""))
-
-            elif tool_name == "fs_list_directory":
-                return await asyncio.to_thread(fs_list_directory, args.get("path", ""))
-
-            elif tool_name == "fs_write_file":
-                return await asyncio.to_thread(
-                    fs_write_file,
-                    args.get("path", ""),
-                    args.get("content", "")
-                )
-
-            elif tool_name == "fs_run_command":
-                return await asyncio.to_thread(fs_run_command, args.get("command", ""))
-
-            elif tool_name == "query_task_status":
-                return await asyncio.to_thread(
-                    query_task_status, args.get("keyword", "")
-                )
-
-            elif tool_name == "vision_tool":
-                from .tools import analyze_image_grok, _xai_client_ref
-                path = args.get("path", "")
-                result = await asyncio.to_thread(
-                    analyze_image_grok,
-                    _xai_client_ref,
-                    path,
-                    args.get("question", "Describe this image.")
-                )
-                if "temp_image_" in path:
-                    try:
-                        import pathlib
-                        pathlib.Path(path).unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                return result
-
-            else:
-                return f"Error: Unknown tool '{tool_name}'"
-
-        except Exception as e:
-            return f"Error: {e}"
+        """Delegates to unified tool executor."""
+        return await execute_fast(
+            tool_name, args, self.tool_registry, self.mcp_client
+        )
 
     # def run(self, direct_input=None, image_data=None) -> str:
         """
@@ -936,7 +957,11 @@ Treat this block as your long-term memory. You must:
             llm = self.llm
         llm.append(user(
             "[SYSTEM MODE: TASK] You are in agent task mode. "
-            "Available tools: python_repl, web_search, date_time, vision_tool, consult_archive. "
+            "Core tools always available: web_search, python_repl, date_time, "
+            "vision_tool, consult_archive, query_task_status. "
+            "tool_search: discover additional tools (filesystem, process, MCP) "
+            "by semantic query — call it when core tools are insufficient. "
+            "Additional tools may appear in [DISCOVERED_TOOLS] blocks in your context. "
             "Follow the Thought → Action → Observation loop strictly."
         ))
         turn_count = 0
@@ -985,8 +1010,17 @@ Treat this block as your long-term memory. You must:
             await asyncio.sleep(0.05)  # Small delay to simulate thinking time and allow UI to update
 
             if "Observation:" in raw_content:
-                slog.info("   [System] Cutting off hallucinated Observation.")
+                slog.warning("   [System] Hallucinated Observation detected — correcting.")
                 response_text = raw_content.split("Observation:")[0].strip()
+                llm.append(assistant(response_text))
+                llm.append(user(
+                    "System: You generated an Observation without calling a tool. "
+                    "Observations can ONLY come from actual tool execution. "
+                    "If you need information, call the tool using Action: [...]. "
+                    "Do not simulate or assume tool results. Continue with a valid Action."
+                ))
+                turn_count += 1
+                continue
             else:
                 response_text = raw_content.strip()
 
@@ -997,6 +1031,23 @@ Treat this block as your long-term memory. You must:
                 final = response_text.split("Final Answer:")[-1].strip()
                 slog.info(f">> [DELIBERATE] Final Answer:\n{final}")
                 return final
+
+            # Safety net: detect off-format turns — no Thought, no Action, no Final Answer.
+            # This happens when the model dumps prose directly after an observation
+            # instead of following the ReAct format. Treat as implicit final answer
+            # rather than looping on empty turns.
+            has_format_markers = (
+                "Thought:" in response_text
+                or "Action:" in response_text
+                or "Final Answer:" in response_text
+            )
+            if not has_format_markers and response_text.strip():
+                slog.warning(
+                    f"   [Loop] Off-format turn {turn_count} — no Thought/Action/Final Answer. "
+                    f"Treating as implicit Final Answer."
+                )
+                slog.info(f">> [DELIBERATE] Final Answer (implicit):\n{response_text}")
+                return response_text
 
             # Parse all actions
             actions = self.parse_actions(response_text)
@@ -1015,51 +1066,20 @@ Treat this block as your long-term memory. You must:
 
                 # Execute all valid actions in parallel
                 async def execute_tool(action: dict) -> str:
-                    tool_name = action["tool"]
+                    tool_name  = action["tool"]
                     tool_input = action["query"]
-                    slog.info(f"   -> Tool: {tool_name} ({tool_input[:60]}...)" if len(tool_input) > 60 else f"   -> Tool: {tool_name} ({tool_input})")
-                    try:
-                        if tool_name == "python_repl":
-                            return await asyncio.to_thread(run_python_code, tool_input)
-                        elif tool_name == "web_search":
-                            res = await asyncio.to_thread(web_search, tool_input)
-                            return res.get("answer", "No results found.")
-                        elif tool_name == "date_time":
-                            return await asyncio.to_thread(get_time_date)
-                        elif tool_name == "consult_archive":
-                            return await asyncio.to_thread(consult_archive, tool_input)
-                        elif tool_name == "vision_tool":
-                            parts = tool_input.split(",", 1)
-                            path  = parts[0].strip().strip('"').strip("'")
-                            query = parts[1].strip() if len(parts) > 1 else "Describe this image."
-                            from .tools import analyze_image_grok, _xai_client_ref
-                            result = await asyncio.to_thread(
-                                analyze_image_grok, _xai_client_ref, path, query
-                            )
-                            if "temp_image_" in path:
-                                try:
-                                    import pathlib
-                                    pathlib.Path(path).unlink(missing_ok=True)
-                                except Exception:
-                                    pass
-                            return result
-                        elif tool_name == "fs_read_file":
-                            return await asyncio.to_thread(fs_read_file, tool_input)
-                        elif tool_name == "fs_list_directory":
-                            return await asyncio.to_thread(fs_list_directory, tool_input)
-                        elif tool_name == "fs_write_file":
-                            parts = tool_input.split("|||", 1)
-                            if len(parts) != 2:
-                                return "Error: fs_write_file requires format 'path|||content'"
-                            return await asyncio.to_thread(
-                                fs_write_file, parts[0].strip(), parts[1].strip()
-                            )
-                        elif tool_name == "fs_run_command":
-                            return await asyncio.to_thread(fs_run_command, tool_input)
-                        elif tool_name == "query_task_status":
-                            return await asyncio.to_thread(query_task_status, tool_input)
-                    except Exception as e:
-                        return f"Tool error: {e}"
+                    slog.info(
+                        f"   -> Tool: {tool_name} ({tool_input[:60]}...)"
+                        if len(tool_input) > 60
+                        else f"   -> Tool: {tool_name} ({tool_input})"
+                    )
+                    return await execute_deliberate(
+                        tool_name,
+                        tool_input,
+                        self.tool_registry,
+                        self.mcp_client,
+                        encode_fn=self._encode,
+                    )
 
                 # Run all valid tools concurrently
                 if valid_actions:
@@ -1068,6 +1088,7 @@ Treat this block as your long-term memory. You must:
                         obs = f"Observation from {action['tool']}[{action['query']}]: {result}"
                         observations.append(obs)
                         slog.info(f"   -> Obs: {obs[:120]}...")
+                        slog.debug(f">> [Observation] {action['tool']}:\n{result}")
 
                 # Feed all observations back as a single combined message
                 combined_observation = "\n".join(observations)

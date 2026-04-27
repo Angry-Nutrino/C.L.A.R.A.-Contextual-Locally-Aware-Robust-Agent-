@@ -8,10 +8,12 @@ export default function useClara() {
     } catch { return []; }
   });
   const [thoughts, setThoughts] = useState([]);
+  const [tasks, setTasks] = useState([]);   // live task board
   const [input, setInput] = useState("");
   const [status, setStatus] = useState("disconnected");
   const [selectedImage, setSelectedImage] = useState(null);
   const [streamingContent, setStreamingContent] = useState("");
+  const [lastTokenUsage, setLastTokenUsage] = useState(null);
 
   const socketRef = useRef(null);
   const retryCountRef = useRef(0);
@@ -61,6 +63,27 @@ export default function useClara() {
       if (!isMountedRef.current) return;
       const data = JSON.parse(event.data);
 
+      if (data.type === "task_event") {
+        const { task_id, goal, state, priority, source } = data;
+        setTasks(prev => {
+          const existing = prev.findIndex(t => t.task_id === task_id);
+          const entry = { task_id, goal, state, priority, source };
+          if (existing >= 0) {
+            const updated = [...prev];
+            updated[existing] = entry;
+            // prune completed/failed after 2s
+            if (state === "completed" || state === "failed") {
+              setTimeout(() => {
+                setTasks(p => p.filter(t => t.task_id !== task_id));
+              }, 2000);
+            }
+            return updated;
+          }
+          return [...prev, entry];
+        });
+        return;
+      }
+
       if (data.type === "thought") {
         setThoughts(prev => {
           const newThoughts = [...prev];
@@ -88,6 +111,10 @@ export default function useClara() {
       if (data.type === "stream") {
         setStreamingContent(prev => prev + data.content);
         setStatus("typing");
+      }
+
+      if (data.type === "token_usage") {
+        setLastTokenUsage(data.extra);
       }
 
       if (data.type === "final_answer") {
@@ -163,8 +190,8 @@ export default function useClara() {
   };
 
   return {
-    messages, thoughts, input, setInput, sendMessage, status,
+    messages, thoughts, tasks, input, setInput, sendMessage, status,
     selectedImage, setSelectedImage, handleImageUpload,
-    streamingContent, clearHistory
+    streamingContent, clearHistory, lastTokenUsage
   };
 }

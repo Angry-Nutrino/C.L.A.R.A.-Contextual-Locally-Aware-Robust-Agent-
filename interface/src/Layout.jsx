@@ -1,352 +1,548 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-// 1. UPDATED IMPORTS: Added Paperclip and X for the file upload UI
-import { Terminal, Cpu, MessageSquare, Menu, Send, Paperclip, X , Zap, Activity, MapPin,
-  Shield, Target, User, Disc
+import {
+  Terminal, Cpu, Send, Paperclip, X, Zap, Activity,
+  Shield, User, Copy, Check, ChevronRight, Radio,
+  Layers, Clock, AlertCircle
 } from "lucide-react";
 import useClara from "./hooks/useClara";
-import Typewriter from "./components/Typewriter";
 
+// ─── tiny hook: copy to clipboard ───────────────────────────────────────────
+function useCopy(timeout = 1500) {
+  const [copied, setCopied] = useState(false);
+  const copy = useCallback((text) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), timeout);
+    });
+  }, [timeout]);
+  return [copied, copy];
+}
+
+// ─── Task board card ─────────────────────────────────────────────────────────
+function TaskCard({ task, exiting }) {
+  const isBackground = task.goal.startsWith("[BACKGROUND]") || task.goal.startsWith("[ENVIRONMENT]");
+  const cleanGoal = task.goal
+    .replace(/^\[BACKGROUND\]\s*/, "")
+    .replace(/^\[ENVIRONMENT\]\s*/, "")
+    .replace(/^\[AUTONOMOUS\]\s*/, "");
+
+  const stateConfig = {
+    pending:   { dot: "bg-amber-400",   border: "border-amber-500/20",   label: "QUEUED"  },
+    active:    { dot: "bg-blue-400 animate-pulse", border: "border-blue-500/30", label: "ACTIVE"  },
+    running:   { dot: "bg-emerald-400 animate-pulse", border: "border-emerald-500/40 shadow-[0_0_12px_rgba(16,185,129,0.15)]", label: "RUNNING" },
+    completed: { dot: "bg-emerald-500", border: "border-emerald-500/10", label: "DONE"    },
+    failed:    { dot: "bg-red-500",     border: "border-red-500/30",     label: "FAILED"  },
+    paused:    { dot: "bg-yellow-400",  border: "border-yellow-500/20",  label: "PAUSED"  },
+  };
+
+  const cfg = stateConfig[task.state] || stateConfig.pending;
+  const priorityPct = Math.round((task.priority || 0.5) * 100);
+  const priorityColor = task.priority >= 0.9 ? "bg-red-500" : task.priority >= 0.5 ? "bg-amber-400" : "bg-blue-400";
+
+  return (
+    <div className={`
+      task-card relative rounded-lg border p-3 mb-2 overflow-hidden
+      ${cfg.border}
+      ${isBackground ? "opacity-60" : ""}
+      ${exiting ? "task-card-exit" : "task-card-enter"}
+      ${task.state === "failed" ? "task-card-shake" : ""}
+      bg-black/30 backdrop-blur-sm transition-all duration-300
+    `}>
+      {/* priority bar */}
+      <div className="absolute bottom-0 left-0 h-[2px] w-full bg-white/5">
+        <div
+          className={`h-full ${priorityColor} transition-all duration-700`}
+          style={{ width: `${priorityPct}%` }}
+        />
+      </div>
+
+      <div className="flex items-start gap-2">
+        <span className={`mt-1 flex-shrink-0 w-2 h-2 rounded-full ${cfg.dot}`} />
+        <div className="flex-1 min-w-0">
+          <p className="text-[11px] text-gray-200 font-mono leading-snug truncate">{cleanGoal}</p>
+          <div className="flex items-center gap-2 mt-1">
+            <span className={`text-[9px] font-bold tracking-widest ${
+              task.state === "running" ? "text-emerald-400" :
+              task.state === "failed"  ? "text-red-400" :
+              task.state === "completed" ? "text-emerald-500/60" : "text-white/30"
+            }`}>{cfg.label}</span>
+            {task.source === "user" && (
+              <span className="text-[9px] text-purple-400/70 font-mono">USER</span>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Message bubble ──────────────────────────────────────────────────────────
+function MessageBubble({ msg, index, messages, onQuote }) {
+  const [hovered, setHovered] = useState(false);
+  const [copied, copy] = useCopy();
+  const isClara = msg.sender === "Clara";
+
+  const replyTarget = isClara && msg.messageId
+    ? messages.find(m => m.sender === "User" && m.messageId === msg.messageId)
+    : null;
+
+  return (
+    <div
+      className={`flex msg-enter ${isClara ? "justify-start" : "justify-end"}`}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <div className={`relative max-w-[80%] group`}>
+        {/* hover actions */}
+        <div className={`
+          absolute -top-7 ${isClara ? "left-0" : "right-0"}
+          flex items-center gap-1 transition-all duration-150
+          ${hovered ? "opacity-100 translate-y-0" : "opacity-0 translate-y-1 pointer-events-none"}
+        `}>
+          <span className="text-[9px] font-mono text-white/30 px-2">{msg.time}</span>
+          {isClara && (
+            <button
+              onClick={() => copy(msg.text)}
+              className="p-1 rounded bg-black/60 border border-white/10 hover:border-emerald-500/40 transition-colors"
+            >
+              {copied ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} className="text-white/40" />}
+            </button>
+          )}
+        </div>
+
+        {/* bubble */}
+        <div className={`
+          p-4 rounded-2xl flex flex-col gap-2 transition-all duration-150
+          ${isClara
+            ? "bg-gradient-to-br from-emerald-950/60 to-black/60 border border-emerald-500/20 text-emerald-50 shadow-[0_0_20px_rgba(16,185,129,0.08)] hover:shadow-[0_0_25px_rgba(16,185,129,0.12)]"
+            : "bg-gradient-to-br from-[#1c1c1c] to-[#141414] border border-white/8 text-gray-200 hover:border-white/12"
+          }
+        `}>
+          {/* image */}
+          {msg.image && (
+            <img
+              src={msg.image}
+              alt="Upload"
+              className="w-full h-auto max-h-56 object-cover rounded-xl border border-white/10 cursor-zoom-in hover:brightness-110 transition-all"
+            />
+          )}
+
+          {/* reply attribution */}
+          {replyTarget && (
+            <div className="flex items-start gap-2 pb-2 mb-1 border-b border-emerald-500/10">
+              <div className="w-0.5 h-full bg-emerald-500/40 rounded-full flex-shrink-0 self-stretch min-h-3" />
+              <span className="text-[10px] text-emerald-400/50 font-mono leading-relaxed italic truncate">
+                {replyTarget.text.slice(0, 60)}{replyTarget.text.length > 60 ? "…" : ""}
+              </span>
+            </div>
+          )}
+
+          {/* content */}
+          {isClara ? (
+            <div className="prose prose-invert prose-sm max-w-none leading-relaxed
+              prose-code:bg-black/50 prose-code:text-emerald-300 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-[11px]
+              prose-pre:bg-black/70 prose-pre:border prose-pre:border-emerald-500/10 prose-pre:rounded-xl prose-pre:text-xs
+              prose-a:text-emerald-400 prose-strong:text-emerald-100 prose-headings:text-white
+              prose-p:text-emerald-50/90 prose-li:text-emerald-50/80">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+            </div>
+          ) : (
+            <p className="whitespace-pre-wrap leading-relaxed text-sm">{msg.text}</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Vitals bar ──────────────────────────────────────────────────────────────
+function VitalBar({ label, value, icon: Icon, color = "emerald", warn = 85 }) {
+  const pct = parseFloat(value) || 0;
+  const isWarn = pct >= warn;
+  const barColor = isWarn
+    ? "bg-amber-400"
+    : color === "blue" ? "bg-blue-400"
+    : color === "yellow" ? "bg-yellow-400"
+    : "bg-emerald-400";
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5 text-[10px] font-mono text-white/40">
+          <Icon size={10} className={isWarn ? "text-amber-400" : "text-white/30"} />
+          <span>{label}</span>
+        </div>
+        <span className={`text-[10px] font-mono ${isWarn ? "text-amber-400" : "text-white/30"}`}>
+          {value}
+        </span>
+      </div>
+      <div className="h-[3px] bg-white/5 rounded-full overflow-hidden">
+        <div
+          className={`h-full ${barColor} rounded-full transition-all duration-700 ease-out vital-bar-fill`}
+          style={{ width: `${Math.min(pct, 100)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ─── Main Layout ─────────────────────────────────────────────────────────────
 export default function Layout() {
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [isBrainOpen, setIsBrainOpen] = useState(true);
-  const [viewImage, setViewImage] = useState(null);
-  const [isFocused, setIsFocused] = useState(false);
-  const [soul, setSoul] = useState(null);
-  const [quotePopup, setQuotePopup] = useState(null); // { x, y, text, sender }
+  const [isSidebarOpen, setIsSidebarOpen]     = useState(true);
+  const [isNeuralOpen, setIsNeuralOpen]       = useState(true);
+  const [viewImage, setViewImage]             = useState(null);
+  const [isFocused, setIsFocused]             = useState(false);
+  const [soul, setSoul]                       = useState(null);
+  const [quotePopup, setQuotePopup]           = useState(null);
+  const [currentMode, setCurrentMode]         = useState(null); // FAST/CHAT/DELIBERATE
 
-  useEffect(() => {
-    // Poll the soul every 5 seconds to keep vitals "alive"
-    const fetchSoul = () => {
-      fetch("http://localhost:8001/soul")
-        .then(res => res.json())
-        .then(data => setSoul(data))
-        .catch(err => console.error("Soul fetch error:", err));
-    };
-    
-    fetchSoul(); // Initial fetch
-    const interval = setInterval(fetchSoul, 5000); // Live update
-    return () => clearInterval(interval);
-  }, []);
-  
-  // 2. UPDATED HOOK: Getting the image tools from useClara
   const {
-    messages, thoughts, input, setInput, sendMessage, status,
-    selectedImage, setSelectedImage, handleImageUpload,
-    streamingContent, clearHistory
+    messages, thoughts, tasks, input, setInput,
+    sendMessage, status, selectedImage, setSelectedImage,
+    handleImageUpload, streamingContent, clearHistory, lastTokenUsage
   } = useClara();
-  
-  const chatEndRef = useRef(null);
-  const brainEndRef = useRef(null);
-  const textareaRef = useRef(null); // Ref for the auto-expanding box
 
-  // Auto-scroll logic for Chat
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
-  
-  // Auto-scroll logic for Brain
+  const chatEndRef   = useRef(null);
+  const neuralEndRef = useRef(null);
+  const textareaRef  = useRef(null);
+
+  // soul vitals polling
   useEffect(() => {
-    brainEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    const timeoutId = setTimeout(() => {
-      brainEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }, 100);
-    return () => clearTimeout(timeoutId);
+    const fetchSoul = () =>
+      fetch("http://localhost:8001/soul")
+        .then(r => r.json())
+        .then(setSoul)
+        .catch(() => {});
+    fetchSoul();
+    const id = setInterval(fetchSoul, 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  // auto-scroll chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, streamingContent]);
+
+  // auto-scroll neural
+  useEffect(() => {
+    neuralEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [thoughts]);
 
-  // 3. AUTO-EXPAND LOGIC: Grow the text box as you type
+  // auto-expand textarea
   useEffect(() => {
     if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'; // Reset
-      textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px'; // Grow to fit content
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = textareaRef.current.scrollHeight + "px";
     }
   }, [input]);
 
-  // 4. UPDATED KEY HANDLER: Shift+Enter = New Line, Enter = Send
+  // detect mode from thoughts
+  useEffect(() => {
+    const last = thoughts[thoughts.length - 1];
+    if (!last) return;
+    if (last.text?.includes("FAST")) setCurrentMode("FAST");
+    else if (last.text?.includes("DELIBERATE")) setCurrentMode("DELIBERATE");
+    else if (last.text?.includes("CHAT")) setCurrentMode("CHAT");
+  }, [thoughts]);
+
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault(); // Stop new line
+      e.preventDefault();
       sendMessage();
     }
   };
 
-  return (
-    <div className="flex h-screen w-full bg-[var(--bg-depth)] text-gray-200 overflow-hidden font-sans">
-      
-      {/* --- ZONE A: LEFT SIDEBAR --- */}
-      <aside 
-        className={`
-          bg-black/40 border-r border-white/5 flex-col hidden md:flex backdrop-blur-md relative overflow-hidden transition-all duration-300 ease-in-out
-          ${isSidebarOpen ? "w-72 translate-x-0 opacity-100" : "w-0 -translate-x-full opacity-0 border-none"}
-        `}
-      >
-        
-        {/* BACKGROUND NOISE (Optional Texture) */}
-        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-5 pointer-events-none"></div>
+  const handleQuote = (text, sender) => {
+    const label = sender === "Clara" ? "[Clara]" : "[Alkama]";
+    setInput(prev => `> ${label}: ${text}\n\n${prev}`);
+    setQuotePopup(null);
+    window.getSelection()?.removeAllRanges();
+    textareaRef.current?.focus();
+  };
 
-        {/* HEADER */}
-        <div className="p-6 border-b border-white/5">
-          <h1 className="text-xl font-bold text-emerald-500 tracking-wider flex items-center gap-2 font-mono">
-            <Terminal size={20} />
-            C.L.A.R.A.
-          </h1>
-          <div className="flex items-center gap-2 mt-2">
-             <span className="relative flex h-2 w-2">
-               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-             </span>
-             <p className="text-[10px] text-emerald-400/60 font-mono tracking-widest">SYSTEM ONLINE // V2.0.4</p>
+  const modeChip = {
+    FAST:       { color: "text-amber-400 border-amber-500/30 bg-amber-500/10",      pulse: false },
+    CHAT:       { color: "text-blue-400 border-blue-500/30 bg-blue-500/10",         pulse: false },
+    DELIBERATE: { color: "text-emerald-400 border-emerald-500/40 bg-emerald-500/10", pulse: true  },
+  };
+
+  // parse vitals percentages
+  const ramPct  = soul ? parseFloat(soul.vitals?.memory_usage)  || 0 : 0;
+  const vramPct = soul ? (() => {
+    const s = soul.vitals?.gpu || "";
+    const m = s.match(/(\d+\.?\d*)GB\s*\/\s*(\d+\.?\d*)GB/);
+    return m ? Math.round((parseFloat(m[1]) / parseFloat(m[2])) * 100) : 0;
+  })() : 0;
+  const cpuPct  = soul ? parseFloat(soul.vitals?.cpu) || 0 : 0;
+
+  return (
+    <div className="flex h-screen w-full bg-[#050505] text-gray-200 overflow-hidden"
+      onMouseUp={() => {
+        const sel = window.getSelection();
+        const text = sel?.toString().trim();
+        if (!text) { setQuotePopup(null); return; }
+        let node = sel.anchorNode;
+        while (node && !node.dataset?.msgIndex) node = node.parentElement;
+        const sender = node ? messages[parseInt(node.dataset.msgIndex)]?.sender : null;
+        const range = sel.getRangeAt(0);
+        const rect = range.getBoundingClientRect();
+        setQuotePopup({ x: rect.left + rect.width / 2, y: rect.top - 10, text, sender });
+      }}
+      onClick={(e) => {
+        if (!window.getSelection()?.toString().trim()) setQuotePopup(null);
+      }}
+    >
+
+      {/* ── ZONE A: SIDEBAR ──────────────────────────────────────────────── */}
+      <aside className={`
+        relative flex flex-col bg-black/50 border-r border-white/5
+        backdrop-blur-xl overflow-hidden transition-all duration-300 ease-in-out hidden md:flex
+        ${isSidebarOpen ? "w-72" : "w-0 border-none"}
+      `}>
+        {/* subtle scanline texture */}
+        <div className="absolute inset-0 pointer-events-none opacity-[0.03]"
+          style={{ backgroundImage: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.5) 2px, rgba(255,255,255,0.5) 3px)" }}
+        />
+
+        {/* header */}
+        <div className="p-5 border-b border-white/5 flex-shrink-0">
+          <div className="flex items-center gap-2.5">
+            <div className="relative">
+              <Terminal size={18} className="text-emerald-400" />
+              <span className="absolute -bottom-0.5 -right-0.5 w-1.5 h-1.5 bg-emerald-500 rounded-full shadow-[0_0_6px_2px_rgba(16,185,129,0.6)] animate-[breathe_2.5s_ease-in-out_infinite]" />
+            </div>
+            <h1 className="text-sm font-bold text-white tracking-[0.15em] font-mono">C.L.A.R.A.</h1>
           </div>
+          <p className="text-[9px] text-emerald-400/40 font-mono tracking-[0.25em] mt-1.5 ml-[26px]">
+            SYSTEM ONLINE · {soul?.version || "v2.6"}
+          </p>
         </div>
 
-        {/* DYNAMIC CONTENT */}
-        {soul && (
-          <div className="flex-1 overflow-y-auto p-6 space-y-8 scrollbar-hide">
-            
-            {/* 1. IDENTITY SECTION */}
-            <div className="space-y-3">
-              <h3 className="text-[10px] uppercase tracking-[0.2em] text-white/30 font-bold flex items-center gap-2">
-                <User size={10} /> Operator Identity
-              </h3>
-              <div className="bg-white/5 rounded-lg p-4 border border-white/5 relative overflow-hidden group">
-                <div className="absolute top-0 right-0 p-2 opacity-20 group-hover:opacity-100 transition-opacity">
-                  <Shield size={16} />
+        <div className="flex-1 overflow-y-auto p-5 space-y-6 scrollbar-thin">
+
+          {/* identity */}
+          {soul && (
+            <div className="space-y-2">
+              <p className="text-[9px] uppercase tracking-[0.2em] text-white/20 font-mono flex items-center gap-1.5">
+                <User size={9} /> Operator
+              </p>
+              <div className="rounded-xl bg-white/[0.03] border border-white/5 p-3.5 relative overflow-hidden group">
+                <div className="absolute top-0 right-0 p-2 opacity-10 group-hover:opacity-30 transition-opacity">
+                  <Shield size={20} />
                 </div>
-                <div className="text-lg font-medium text-white font-mono">{soul.identity.name}</div>
-                <div className="text-xs text-emerald-400 font-mono mt-1">{soul.identity.role}</div>
-                <div className="flex items-center gap-3 mt-4 pt-3 border-t border-white/5">
-                  <div className="flex items-center gap-1 text-[10px] text-gray-400">
-                    <MapPin size={10} /> {soul.identity.location}
-                  </div>
-                  <div className="flex items-center gap-1 text-[10px] text-gray-400">
-                    <Disc size={10} /> {soul.identity.clearance}
-                  </div>
+                <p className="text-base font-semibold text-white font-mono">{soul.identity.name}</p>
+                <p className="text-[11px] text-emerald-400/80 mt-0.5">{soul.identity.role}</p>
+                <div className="flex items-center gap-2 mt-3 pt-2.5 border-t border-white/5">
+                  <span className="text-[9px] text-white/30 font-mono">{soul.identity.location}</span>
+                  <span className="w-0.5 h-2.5 bg-white/10 rounded-full" />
+                  <span className="text-[9px] text-white/30 font-mono">{soul.identity.clearance}</span>
                 </div>
               </div>
             </div>
+          )}
 
-            {/* 2. MISSION STATUS */}
-            <div className="space-y-3">
-              <h3 className="text-[10px] uppercase tracking-[0.2em] text-white/30 font-bold flex items-center gap-2">
-                <Target size={10} /> Current Objective
-              </h3>
-              <div className="bg-gradient-to-r from-emerald-900/10 to-transparent p-4 rounded border-l-2 border-emerald-500 relative">
-                 <div className="text-xs text-emerald-100 font-medium">{soul.mission.current}</div>
-                 <div className="flex justify-between items-center mt-2">
-                    <span className="text-[10px] bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/20">
-                      {soul.mission.status}
-                    </span>
-                    <span className="text-[10px] text-white/20 font-mono">{soul.mission.phase}</span>
-                 </div>
-              </div>
+          {/* active context — derived from recent thoughts/tasks */}
+          <div className="space-y-2">
+            <p className="text-[9px] uppercase tracking-[0.2em] text-white/20 font-mono flex items-center gap-1.5">
+              <Radio size={9} /> Active Context
+            </p>
+            <div className="rounded-xl bg-gradient-to-br from-emerald-950/20 to-transparent border border-emerald-500/10 p-3 border-l-2 border-l-emerald-500/40">
+              {tasks.filter(t => t.state === "running" || t.state === "active").length > 0 ? (
+                tasks.filter(t => t.state === "running" || t.state === "active").slice(0, 2).map((t, i) => (
+                  <p key={i} className="text-[11px] text-emerald-100/70 font-mono leading-relaxed truncate">
+                    {t.goal.replace(/^\[.*?\]\s*/, "").slice(0, 55)}
+                    {t.goal.length > 55 ? "…" : ""}
+                  </p>
+                ))
+              ) : (
+                <p className="text-[11px] text-white/20 font-mono italic">Standing by</p>
+              )}
+              {soul?.mission?.phase && (
+                <p className="text-[9px] text-white/20 font-mono mt-1.5">{soul.mission.phase}</p>
+              )}
             </div>
+          </div>
 
-            {/* 3. SKILL MATRIX (Tags) */}
-            <div className="space-y-3">
-              <h3 className="text-[10px] uppercase tracking-[0.2em] text-white/30 font-bold flex items-center gap-2">
-                <Zap size={10} /> Competency Matrix
-              </h3>
-              <div className="flex flex-wrap gap-2">
-                {soul.skills?.map((skill, i) => (
-                  <span key={i} className="text-[10px] px-2 py-1 rounded bg-[#111] text-gray-300 border border-white/10 hover:border-emerald-500/50 hover:text-emerald-400 transition-colors cursor-default">
+          {/* skills */}
+          {soul?.skills?.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-[9px] uppercase tracking-[0.2em] text-white/20 font-mono flex items-center gap-1.5">
+                <Zap size={9} /> Competency Matrix
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {soul.skills.map((skill, i) => (
+                  <span key={i} className="text-[9px] px-2 py-1 rounded-lg bg-white/[0.04] border border-white/8
+                    text-white/40 hover:text-emerald-300 hover:border-emerald-500/30 hover:bg-emerald-500/5
+                    transition-all duration-200 cursor-default font-mono">
                     {skill}
                   </span>
                 ))}
               </div>
             </div>
+          )}
 
-          </div>
-        )}
-        
-        {/* 4. SYSTEM VITALS (Footer) */}
+        </div>
+
+        {/* vitals footer */}
         {soul && (
-          <div className="p-4 border-t border-white/5 bg-black/20 backdrop-blur-lg">
-             {/* CPU ROW (Full Width) */}
-             <div className="flex items-center gap-2 text-[10px] font-mono text-emerald-500/80 mb-2 border-b border-white/5 pb-2">
-                <Cpu size={12} />
-                <span className="truncate">{soul.vitals.cpu}</span>
-             </div>
-
-             {/* GPU & RAM ROW (Split) */}
-             <div className="grid grid-cols-2 gap-2 text-[10px] font-mono text-white/40">
-                <div className="flex items-center gap-2">
-                  <Zap size={12} className="text-yellow-500/50"/> 
-                  <span>{soul.vitals.gpu}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Activity size={12} className="text-blue-500/50"/> 
-                  <span>RAM: {soul.vitals.memory_usage}</span>
-                </div>
-             </div>
+          <div className="p-4 border-t border-white/5 bg-black/30 space-y-3 flex-shrink-0">
+            <VitalBar label="CPU" value={`${cpuPct}%`} icon={Cpu} color="emerald" warn={80} />
+            <VitalBar label="RAM" value={`${ramPct}%`} icon={Activity} color="blue" warn={90} />
+            <VitalBar label="VRAM" value={`${vramPct}%`} icon={Zap} color="yellow" warn={80} />
           </div>
         )}
       </aside>
 
-      {/* --- ZONE B: MAIN CHAT --- */}
-      <main className="flex-1 flex flex-col relative h-screen overflow-hidden bg-[#0a0a0a]">
-        
-        {/* HEADER */}
-        <header className="h-14 border-b border-[var(--border-subtle)] flex items-center justify-between px-4 bg-[var(--bg-depth)]/80 backdrop-blur-md sticky top-0 z-10">
-          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 hover:bg-white/5 rounded"><Menu size={20} /></button>
-          
-          <span className={`text-xs font-bold px-3 py-1 rounded-full transition-all border
-            ${status === 'thinking' || status === 'typing'
-              ? 'bg-emerald-500/20 text-emerald-400 animate-pulse border-emerald-500/50'
-              : status === 'disconnected'
-              ? 'bg-red-500/20 text-red-400 border-red-500/50 animate-pulse'
-              : 'opacity-30 border-transparent'}`}>
-            {status === 'thinking' || status === 'typing'
-              ? 'PROCESSING...'
-              : status === 'disconnected'
-              ? 'DISCONNECTED'
-              : 'IDLE'}
-          </span>
-          
+      {/* ── ZONE B: CHAT ─────────────────────────────────────────────────── */}
+      <main className="flex-1 flex flex-col relative h-screen overflow-hidden bg-[#080808]">
+
+        {/* header */}
+        <header className="h-13 border-b border-white/5 flex items-center justify-between px-4
+          bg-[#080808]/90 backdrop-blur-md sticky top-0 z-10 flex-shrink-0">
+          <button onClick={() => setIsSidebarOpen(p => !p)}
+            className="p-2 hover:bg-white/5 rounded-lg transition-colors text-white/40 hover:text-white/70">
+            <Layers size={18} />
+          </button>
+
+          <div className="flex items-center gap-2">
+            {/* mode chip */}
+            {currentMode && status !== "idle" && status !== "disconnected" && (
+              <span className={`text-[9px] font-bold font-mono px-2 py-0.5 rounded border tracking-widest
+                ${modeChip[currentMode]?.color || "text-white/30 border-white/10"}
+                ${modeChip[currentMode]?.pulse ? "animate-pulse" : ""}
+              `}>
+                {currentMode}
+              </span>
+            )}
+
+            {/* status pill */}
+            <span className={`text-[10px] font-bold px-3 py-1 rounded-full border transition-all
+              ${status === "thinking" || status === "typing"
+                ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30 animate-pulse"
+                : status === "disconnected"
+                ? "bg-red-500/10 text-red-400 border-red-500/30"
+                : "opacity-0 border-transparent"}`
+            }>
+              {status === "thinking" ? "PROCESSING" : status === "typing" ? "RESPONDING" :
+               status === "disconnected" ? "OFFLINE" : "ONLINE"}
+            </span>
+          </div>
+
           <div className="flex items-center gap-1">
-            <button
-              onClick={clearHistory}
-              className="text-[10px] font-mono px-2 py-1 rounded border border-white/10 text-white/30 hover:text-red-400 hover:border-red-500/40 hover:bg-red-500/10 transition-all duration-200"
-            >
+            <button onClick={clearHistory}
+              className="text-[9px] font-mono px-2 py-1 rounded-lg border border-white/8
+              text-white/20 hover:text-red-400 hover:border-red-500/30 transition-all">
               CLEAR
             </button>
-            <button onClick={() => setIsBrainOpen(!isBrainOpen)} className="p-2 hover:bg-white/5 rounded text-purple-400"><Cpu size={20} /></button>
+            <button onClick={() => setIsNeuralOpen(p => !p)}
+              className="p-2 hover:bg-white/5 rounded-lg transition-colors text-purple-400/60 hover:text-purple-400">
+              <Cpu size={18} />
+            </button>
           </div>
         </header>
 
-        {/* MESSAGES AREA */}
-        <div
-          className="flex-1 overflow-y-auto p-4 space-y-6 scroll-smooth pb-32"
-          onMouseUp={() => {
-            const sel = window.getSelection();
-            const text = sel?.toString().trim();
-            if (!text) { setQuotePopup(null); return; }
-            let node = sel.anchorNode;
-            while (node && !node.dataset?.msgIndex) node = node.parentElement;
-            const sender = node ? messages[parseInt(node.dataset.msgIndex)]?.sender : null;
-            const range = sel.getRangeAt(0);
-            const rect = range.getBoundingClientRect();
-            setQuotePopup({ x: rect.left + rect.width / 2, y: rect.top - 10, text, sender });
-          }}
-          onClick={() => { if (!window.getSelection()?.toString().trim()) setQuotePopup(null); }}
-        >
+        {/* persistent CLARA watermark — fixed behind all content */}
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0 select-none">
+          <h1 className="text-[11rem] font-black text-white/[0.018] tracking-[0.4em] font-mono">CLARA</h1>
+        </div>
+
+        {/* messages */}
+        <div className="relative z-10 flex-1 overflow-y-auto px-5 py-6 space-y-5 scroll-smooth pb-36 scrollbar-thin">
           {messages.length === 0 && !streamingContent ? (
-            <div className="text-center mt-20 opacity-30">
-              <h1 className="text-4xl font-black mb-2">INITIALIZED</h1>
-              <p>Waiting for input...</p>
+            <div className="flex flex-col items-center justify-center h-full gap-3 select-none">
+              <div className="relative flex items-center justify-center">
+                {/* outer slow pulse ring */}
+                <div className="absolute w-28 h-28 rounded-full border border-emerald-500/8 animate-[breathe_4s_ease-in-out_infinite]" />
+                {/* mid ring */}
+                <div className="absolute w-20 h-20 rounded-full border border-emerald-500/12 animate-[breathe_4s_ease-in-out_infinite_0.6s]" />
+                {/* inner ring */}
+                <div className="absolute w-12 h-12 rounded-full border border-emerald-500/20 animate-[breathe_4s_ease-in-out_infinite_1.2s]" />
+                {/* name */}
+                <h1 className="text-3xl font-black text-white/8 tracking-[0.3em] font-mono z-10">CLARA</h1>
+              </div>
+              <p className="text-[9px] text-white/12 font-mono tracking-[0.4em] mt-1">READY</p>
             </div>
           ) : (
             messages.map((msg, i) => (
-              <div key={i} data-msg-index={i} className={`flex ${msg.sender === "User" ? "justify-end" : "justify-start"}`}>
-                
-                {/* 1. THE BUBBLE CONTAINER (Wrap everything here) */}
-                <div className={`max-w-[80%] p-4 rounded-xl flex flex-col gap-2 
-                  ${msg.sender === "User" 
-                    ? "bg-[#222] border border-[#333]" 
-                    : "bg-emerald-900/10 border border-emerald-500/20 text-emerald-100 shadow-[0_0_15px_rgba(16,185,129,0.1)]"
-                  }`}>
-                  
-                  {/* 2. IMAGE (Inside the bubble) */}
-                  {msg.image && (
-                    <div className="group relative w-full">
-                      <img 
-                        src={msg.image} 
-                        alt="Upload" 
-                        onClick={() => setViewImage(msg.image)} // Triggers the lightbox
-                        className="w-full h-auto max-h-64 object-cover rounded-lg border border-white/10 cursor-zoom-in hover:brightness-110 transition-all"
-                      />
-                    </div>
-                  )}
-
-                  {/* 3. TEXT (Below the image) */}
-                  {msg.sender === "Clara" && msg.messageId && (() => {
-                    const userMsg = messages.find(
-                      m => m.sender === "User" && m.messageId === msg.messageId
-                    );
-                    return userMsg ? (
-                      <div style={{
-                        fontSize: "0.7rem",
-                        color: "rgba(16,185,129,0.5)",
-                        marginBottom: "4px",
-                        fontStyle: "italic"
-                      }}>
-                        ↳ re: "{userMsg.text.slice(0, 50)}{userMsg.text.length > 50 ? "…" : ""}"
-                      </div>
-                    ) : null;
-                  })()}
-                  {msg.sender === "Clara" ? (
-                    <div className="prose prose-invert prose-sm max-w-none leading-relaxed
-                        prose-code:bg-black/40 prose-code:text-emerald-300 prose-code:px-1 prose-code:rounded
-                        prose-pre:bg-black/60 prose-pre:border prose-pre:border-white/10 prose-pre:rounded-lg
-                        prose-a:text-emerald-400 prose-strong:text-white prose-headings:text-white">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
-                    </div>
-                  ) : (
-                    <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
-                  )}
-                  
-                </div>
+              <div key={i} data-msg-index={i}>
+                <MessageBubble
+                  msg={msg}
+                  index={i}
+                  messages={messages}
+                  onQuote={(text, sender) => handleQuote(text, sender)}
+                />
               </div>
             ))
           )}
 
-          {/* --- THE PHANTOM BUBBLE (Live Stream) --- */}
+          {/* streaming bubble */}
           {streamingContent && (
-            <div className="flex justify-start animate-in fade-in duration-100">
-              <div className="max-w-[80%] p-4 rounded-xl flex flex-col gap-2 bg-emerald-900/10 border border-emerald-500/20 text-emerald-100 shadow-[0_0_15px_rgba(16,185,129,0.1)]">
-                <div className="prose prose-invert prose-sm max-w-none leading-relaxed
-                    prose-code:bg-black/40 prose-code:text-emerald-300 prose-code:px-1 prose-code:rounded
-                    prose-pre:bg-black/60 prose-pre:border prose-pre:border-white/10 prose-pre:rounded-lg
-                    prose-a:text-emerald-400 prose-strong:text-white prose-headings:text-white">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingContent}</ReactMarkdown>
-                </div>
-                <span className="inline-block w-2 h-4 bg-emerald-400 animate-pulse"></span>
+            <div className="flex justify-start msg-enter">
+              <div className="max-w-[80%] p-4 rounded-2xl bg-gradient-to-br from-emerald-950/60
+                to-black/60 border border-emerald-500/20 shadow-[0_0_20px_rgba(16,185,129,0.08)]">
+                {streamingContent ? (
+                  <div className="prose prose-invert prose-sm max-w-none leading-relaxed
+                    prose-code:bg-black/50 prose-code:text-emerald-300 prose-code:px-1.5 prose-code:rounded
+                    prose-pre:bg-black/70 prose-pre:border prose-pre:border-emerald-500/10 prose-pre:rounded-xl
+                    prose-a:text-emerald-400 prose-strong:text-emerald-100 prose-p:text-emerald-50/90">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingContent}</ReactMarkdown>
+                  </div>
+                ) : (
+                  <div className="flex gap-1 items-center py-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-[breathe_1.2s_ease-in-out_infinite]" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-[breathe_1.2s_ease-in-out_infinite_0.2s]" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-[breathe_1.2s_ease-in-out_infinite_0.4s]" />
+                  </div>
+                )}
+                <span className="inline-block w-1.5 h-3.5 bg-emerald-400 animate-pulse ml-0.5 align-middle" />
               </div>
             </div>
           )}
-
           <div ref={chatEndRef} />
         </div>
 
-        {/* --- NEW INPUT CAPSULE --- */}
-        <div className="absolute bottom-0 left-0 w-full p-6 z-40 bg-gradient-to-t from-[#0a0a0a] via-[#0a0a0a]/90 to-transparent">
-          
-          <div 
-            className={`
-              relative flex items-end gap-3 p-3 rounded-2xl border transition-all duration-500 ease-out
-              ${status === "thinking" 
-                ? "bg-emerald-900/10 border-emerald-500/50 shadow-[0_0_30px_-5px_rgba(16,185,129,0.2)] animate-pulse" 
-                : isFocused 
-                  ? "bg-black/80 border-emerald-500/30 shadow-[0_0_50px_-10px_rgba(16,185,129,0.1)]" 
-                  : "bg-[#111]/50 border-white/5 shadow-none backdrop-blur-sm"
-              }
-            `}
-          >
-            {/* ATTACHMENT BUTTON */}
-            <button 
-              onClick={() => document.getElementById('file-upload').click()}
-              className={`p-3 rounded-xl transition-colors ${selectedImage ? "text-emerald-400 bg-emerald-900/20" : "text-white/40 hover:text-white hover:bg-white/5"}`}
-            >
-              <Paperclip size={20} />
-            </button>
-            <input 
-              type="file" 
-              id="file-upload" 
-              className="hidden" 
-              accept="image/*"
-              onChange={handleImageUpload}
-            />
+        {/* input capsule */}
+        <div className="absolute bottom-0 left-0 w-full px-5 pb-5 pt-8 z-40
+          bg-gradient-to-t from-[#080808] via-[#080808]/95 to-transparent">
 
-            {/* TEXT INPUT AREA */}
+          {/* image preview */}
+          {selectedImage && (
+            <div className="mb-2 ml-1 flex items-center gap-2 bg-black/80 border border-emerald-500/20
+              rounded-xl px-2.5 py-1.5 w-fit">
+              <img src={selectedImage} alt="Preview" onClick={() => setViewImage(selectedImage)}
+                className="h-8 w-8 object-cover rounded-lg border border-white/10 cursor-zoom-in" />
+              <span className="text-[10px] text-emerald-400/70 font-mono">Image attached</span>
+              <button onClick={() => setSelectedImage(null)}
+                className="ml-1 text-white/25 hover:text-white/60 transition-colors">
+                <X size={12} />
+              </button>
+            </div>
+          )}
+
+          <div className={`
+            relative flex items-end gap-2 px-3 py-2.5 rounded-2xl border transition-all duration-300
+            ${status === "thinking" || status === "typing"
+              ? "bg-emerald-950/20 border-emerald-500/30 shadow-[0_0_40px_-8px_rgba(16,185,129,0.15)]"
+              : isFocused
+              ? "bg-[#0f0f0f] border-white/12 shadow-[0_0_60px_-15px_rgba(16,185,129,0.08)]"
+              : "bg-[#0d0d0d] border-white/6"
+            }
+          `}>
+            <button onClick={() => document.getElementById("file-upload").click()}
+              className={`p-2.5 rounded-xl transition-colors flex-shrink-0
+                ${selectedImage ? "text-emerald-400 bg-emerald-900/20" : "text-white/30 hover:text-white/60 hover:bg-white/5"}`}>
+              <Paperclip size={18} />
+            </button>
+            <input type="file" id="file-upload" className="hidden" accept="image/*" onChange={handleImageUpload} />
+
             <textarea
               ref={textareaRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  sendMessage();
-                }
-              }}
-              onPaste={(e) => {
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onPaste={e => {
                 const items = e.clipboardData?.items;
                 if (!items) return;
                 for (const item of items) {
@@ -354,7 +550,7 @@ export default function Layout() {
                     e.preventDefault();
                     const file = item.getAsFile();
                     const reader = new FileReader();
-                    reader.onload = (ev) => setSelectedImage(ev.target.result);
+                    reader.onload = ev => setSelectedImage(ev.target.result);
                     reader.readAsDataURL(file);
                     break;
                   }
@@ -362,119 +558,142 @@ export default function Layout() {
               }}
               onFocus={() => setIsFocused(true)}
               onBlur={() => setIsFocused(false)}
-              placeholder="Message Clara... (Ctrl+V to paste image)"
-              className="w-full bg-transparent text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-0 resize-none py-3 max-h-32"
+              placeholder="Message Clara…"
+              className="flex-1 bg-transparent text-gray-200 placeholder-white/15 focus:outline-none
+                resize-none py-2.5 text-sm leading-relaxed max-h-36 font-[inherit]"
               rows={1}
-              style={{ minHeight: '44px' }}
+              style={{ minHeight: "40px" }}
             />
 
-            {/* SEND BUTTON */}
-            <button 
-              onClick={sendMessage}
+            <button onClick={sendMessage}
               disabled={!input.trim() && !selectedImage}
-              className={`p-3 rounded-xl transition-all duration-300 ${
-                input.trim() || selectedImage 
-                  ? "bg-emerald-600 text-white shadow-[0_0_15px_rgba(16,185,129,0.4)] hover:bg-emerald-500" 
-                  : "bg-[#222] text-gray-600 cursor-not-allowed"
-              }`}
-            >
-              <Send size={20} />
+              className={`p-2.5 rounded-xl transition-all duration-200 flex-shrink-0
+                ${input.trim() || selectedImage
+                  ? "bg-emerald-600 text-white shadow-[0_0_20px_rgba(16,185,129,0.35)] hover:bg-emerald-500 hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] active:scale-95"
+                  : "bg-white/5 text-white/20 cursor-not-allowed"
+                }`}>
+              <Send size={18} />
             </button>
           </div>
-          
-          {/* IMAGE PREVIEW THUMBNAIL */}
-          {selectedImage && (
-            <div className="absolute -top-16 left-6 flex items-center gap-2 bg-black/80 border border-emerald-500/30 rounded-xl px-2 py-2 shadow-lg">
-              <img
-                src={selectedImage}
-                alt="Preview"
-                className="h-10 w-10 object-cover rounded-lg border border-white/10 cursor-zoom-in"
-                onClick={() => setViewImage(selectedImage)}
-              />
-              <span className="text-xs text-emerald-400 font-mono">Image ready</span>
-              <button
-                onClick={() => setSelectedImage(null)}
-                className="ml-1 text-white/30 hover:text-white/80 transition-colors"
-              >
-                <X size={14} />
-              </button>
-            </div>
-          )}
         </div>
       </main>
 
-      {/* --- ZONE C: THE BRAIN --- */}
-      <aside className={`${isBrainOpen ? "w-80" : "w-0"} transition-all duration-300 border-l border-[var(--border-subtle)] bg-[#0f0f0f] flex flex-col`}>
-        <div className="p-4 border-b border-[var(--border-subtle)] flex items-center justify-between">
-          <div className="flex items-center gap-2 text-purple-400">
-            <Cpu size={18} className={status === 'thinking' ? 'animate-spin-slow' : ''} />
-            <span className="font-bold text-sm">NEURAL STREAM</span>
+      {/* ── ZONE C: NEURAL STREAM ────────────────────────────────────────── */}
+      <aside className={`
+        flex flex-col border-l border-white/5 bg-[#060606] transition-all duration-300
+        ${isNeuralOpen ? "w-80" : "w-0 border-none overflow-hidden"}
+      `}>
+        <div className="p-4 border-b border-white/5 flex items-center justify-between flex-shrink-0">
+          <div className="flex items-center gap-2 text-purple-400/70">
+            <Cpu size={16} className={status === "thinking" ? "animate-[spin_3s_linear_infinite]" : ""} />
+            <span className="text-xs font-bold font-mono tracking-widest">NEURAL STREAM</span>
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-4 scroll-smooth">
-           {thoughts.map((t, i) => {
-             const isLast = i === thoughts.length - 1;
-             return (
-               <div 
-                 key={i} 
-                 className={`
-                   transition-all duration-500 border-l-2 pl-4 py-1 relative
-                   ${isLast 
-                     ? "border-emerald-500 bg-emerald-900/10 shadow-[0_0_15px_rgba(16,185,129,0.1)] opacity-100" 
-                     : "border-purple-500/20 opacity-50 hover:opacity-100 hover:border-purple-500/50"
-                   }
-                 `}
-               >
-                 <span className={`block mb-1 text-[10px] tracking-widest ${isLast ? "text-emerald-400" : "text-purple-400/70"}`}>
-                   [{t.time}]
-                 </span>
-                 <span className={`leading-relaxed whitespace-pre-wrap ${isLast ? "text-emerald-100" : "text-gray-400"}`}>
-                   {t.text}
-                 </span>
-                 {isLast && (
-                    <span className="absolute -left-[5px] top-0 w-2 h-2 bg-emerald-400 rounded-full animate-ping" />
-                 )}
-               </div>
-             );
-           })}
-           <div ref={brainEndRef} className="h-4" />
+
+        <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+
+          {/* ── TOP: TASK BOARD ── */}
+          <div className="flex-shrink-0 border-b border-emerald-500/10 px-3 pt-3 pb-2">
+            <p className="text-[9px] uppercase tracking-[0.2em] text-white/20 font-mono mb-2 flex items-center gap-1.5">
+              <Clock size={9} /> Task Board
+            </p>
+            <div className="space-y-0 max-h-52 overflow-y-auto scrollbar-thin">
+              {tasks.length === 0 ? (
+                <p className="text-[10px] text-white/15 font-mono italic py-2">No active tasks</p>
+              ) : (
+                tasks.slice(-12).map(t => (
+                  <TaskCard key={t.task_id} task={t} />
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* ── BOTTOM: THOUGHT STREAM ── */}
+          <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 scrollbar-thin min-h-0">
+            <p className="text-[9px] uppercase tracking-[0.2em] text-white/20 font-mono mb-1 flex items-center gap-1.5 sticky top-0 bg-[#060606] py-1">
+              <AlertCircle size={9} /> Thought Stream
+            </p>
+            {thoughts.length === 0 ? (
+              <p className="text-[10px] text-white/15 font-mono italic">Idle</p>
+            ) : (
+              thoughts.map((t, i) => {
+                const isLast = i === thoughts.length - 1;
+                return (
+                  <div key={i} className={`
+                    border-l-2 pl-3 py-1 relative transition-all duration-400
+                    ${isLast
+                      ? "border-emerald-500 opacity-100"
+                      : "border-purple-500/15 opacity-40 hover:opacity-70"}
+                  `}>
+                    <span className={`block text-[9px] font-mono mb-0.5 ${isLast ? "text-emerald-400/70" : "text-purple-400/40"}`}>
+                      {t.time}
+                    </span>
+                    <span className={`text-[11px] leading-relaxed whitespace-pre-wrap font-mono
+                      ${isLast ? "text-emerald-100/80" : "text-gray-500"}`}>
+                      {t.text}
+                    </span>
+
+                  </div>
+                );
+              })
+            )}
+            {lastTokenUsage && (
+              <div className="token-usage-pill">
+                <span className="token-label">Last query</span>
+                <span className="token-stat">
+                  {lastTokenUsage.total_tokens.toLocaleString()} tokens
+                </span>
+                <span className="token-divider">·</span>
+                <span className="token-stat">
+                  {lastTokenUsage.prompt_tokens.toLocaleString()} in
+                </span>
+                <span className="token-divider">·</span>
+                <span className="token-stat">
+                  {lastTokenUsage.completion_tokens.toLocaleString()} out
+                </span>
+                {lastTokenUsage.cached_tokens > 0 && (
+                  <>
+                    <span className="token-divider">·</span>
+                    <span className="token-cached">
+                      {lastTokenUsage.cached_tokens.toLocaleString()} cached
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
+            <div ref={neuralEndRef} className="h-2" />
+          </div>
         </div>
       </aside>
-      {/* --- QUOTE POPUP --- */}
+
+      {/* ── QUOTE POPUP ──────────────────────────────────────────────────── */}
       {quotePopup && (
         <button
-          className="fixed z-50 text-xs font-mono px-3 py-1.5 rounded-full shadow-lg
-                     -translate-x-1/2 -translate-y-full
-                     bg-emerald-600/90 text-white border border-emerald-400/30
-                     hover:bg-emerald-500 hover:shadow-[0_0_12px_rgba(16,185,129,0.4)]
-                     transition-all duration-150 animate-in fade-in zoom-in-95"
+          className="fixed z-50 text-[10px] font-mono font-bold px-3 py-1.5 rounded-full shadow-xl
+            -translate-x-1/2 -translate-y-full
+            bg-emerald-600/95 text-white border border-emerald-400/40
+            hover:bg-emerald-500 hover:shadow-[0_0_16px_rgba(16,185,129,0.5)]
+            transition-all duration-150"
           style={{ left: quotePopup.x, top: quotePopup.y }}
-          onMouseDown={(e) => {
+          onMouseDown={e => {
             e.preventDefault();
-            const label = quotePopup.sender === "Clara" ? "[Clara]" : "[Alkama]";
-            setInput(prev => `> ${label}: ${quotePopup.text}\n\n${prev}`);
-            setQuotePopup(null);
-            window.getSelection()?.removeAllRanges();
-            textareaRef.current?.focus();
+            handleQuote(quotePopup.text, quotePopup.sender);
           }}
         >
           QUOTE
         </button>
       )}
 
-      {/* --- LIGHTBOX MODAL --- */}
+      {/* ── LIGHTBOX ─────────────────────────────────────────────────────── */}
       {viewImage && (
-        <div 
-          className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200"
-          onClick={() => setViewImage(null)} // Click anywhere to close
+        <div
+          className="fixed inset-0 z-50 bg-black/95 backdrop-blur-sm flex items-center justify-center p-6"
+          onClick={() => setViewImage(null)}
         >
-          <img 
-            src={viewImage} 
-            alt="Full Screen" 
-            className="max-w-full max-h-full rounded-lg shadow-2xl border border-white/10" 
-          />
-          <button className="absolute top-6 right-6 text-white/50 hover:text-white transition-colors">
-            <X size={32} />
+          <img src={viewImage} alt="Full"
+            className="max-w-full max-h-full rounded-2xl shadow-2xl border border-white/10" />
+          <button className="absolute top-5 right-5 text-white/40 hover:text-white transition-colors">
+            <X size={28} />
           </button>
         </div>
       )}

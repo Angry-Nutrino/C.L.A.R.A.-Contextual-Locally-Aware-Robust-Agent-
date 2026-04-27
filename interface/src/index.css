@@ -1,82 +1,128 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
 @import "tailwindcss";
 
 :root {
-  --bg-depth: #0a0a0a;   /* The Void */
-  --bg-surface: #121212; /* The Cards */
-  --border-subtle: #2a2a2a;
-  --accent-glow: 0 0 20px rgba(255, 255, 255, 0.05);
+  --bg-void:    #050505;
+  --bg-depth:   #080808;
+  --bg-surface: #0d0d0d;
+  --border:     rgba(255,255,255,0.06);
+  --emerald:    #10b981;
+  --emerald-dim: rgba(16,185,129,0.12);
 }
 
 body {
-  background-color: var(--bg-depth);
-  color: #ededed;
-  font-family: 'Inter', sans-serif; /* If you have it, otherwise system-ui */
+  background-color: var(--bg-void);
+  color: #e2e8f0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* The "Pulse" Animation for later */
-@keyframes thinking-pulse {
-  0% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.1); }
-  70% { box-shadow: 0 0 20px 10px rgba(255, 255, 255, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
+/* ── message arrival spring ──────────────────────────────────────────────── */
+@keyframes msg-spring {
+  0%   { opacity: 0; transform: scale(0.96) translateY(6px); }
+  60%  { transform: scale(1.01) translateY(-1px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+.msg-enter {
+  animation: msg-spring 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
-.animate-pulse-glow {
-  animation: thinking-pulse 2s infinite;
+/* ── task card animations ─────────────────────────────────────────────────── */
+@keyframes card-enter {
+  0%   { opacity: 0; transform: translateX(12px) scale(0.97); }
+  100% { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes card-exit {
+  0%   { opacity: 1; transform: translateY(0) scale(1); max-height: 80px; }
+  100% { opacity: 0; transform: translateY(-8px) scale(0.97); max-height: 0; margin: 0; padding: 0; }
+}
+@keyframes card-shake {
+  0%, 100% { transform: translateX(0); }
+  20%  { transform: translateX(-3px); }
+  40%  { transform: translateX(3px); }
+  60%  { transform: translateX(-2px); }
+  80%  { transform: translateX(2px); }
+}
+.task-card-enter { animation: card-enter 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.task-card-exit  { animation: card-exit  0.35s ease-in forwards; }
+.task-card-shake { animation: card-shake 0.3s ease-in-out; }
+
+/* ── ambient breathe (used for CLARA glow, dots, empty state) ─────────────── */
+@keyframes breathe {
+  0%, 100% { opacity: 0.3; transform: scale(1); }
+  50%       { opacity: 0.8; transform: scale(1.08); }
+}
+@keyframes breathe-border {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); border-color: rgba(16,185,129,0.1); }
+  50%       { box-shadow: 0 0 20px 4px rgba(16,185,129,0.1); border-color: rgba(16,185,129,0.4); }
 }
 
-/* Scrollbar Hiding (Clean Look) */
-::-webkit-scrollbar {
-  width: 8px;
-}
-::-webkit-scrollbar-track {
-  background: var(--bg-depth);
-}
-::-webkit-scrollbar-thumb {
-  background: #333;
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #555;
-}
-/* ... existing code ... */
-
-/* 1. THE BREATHING ANIMATION (For the whole UI border) */
-@keyframes breathe-glow {
-  0% { box-shadow: 0 0 5px rgba(16, 185, 129, 0); border-color: #333; }
-  50% { box-shadow: 0 0 20px rgba(16, 185, 129, 0.2); border-color: rgba(16, 185, 129, 0.5); }
-  100% { box-shadow: 0 0 5px rgba(16, 185, 129, 0); border-color: #333; }
-}
-
-.animate-breathe {
-  animation: breathe-glow 3s infinite ease-in-out;
-  border: 1px solid transparent; /* Placeholder for the border transition */
-}
-
-/* 2. THE SIDEBAR REVEAL (Tech Slide-In) */
-@keyframes reveal-slide {
-  0% { opacity: 0; transform: translateY(10px); filter: blur(2px); }
-  100% { opacity: 1; transform: translateY(0); filter: blur(0); }
-}
-
-.reveal-entry {
-  animation: reveal-slide 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-/* 3. THE CURSOR (For the typing effect) */
+/* ── cursor blink ─────────────────────────────────────────────────────────── */
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 .cursor-blink {
   display: inline-block;
-  width: 6px;
-  height: 16px;
-  background-color: #10b981;
+  width: 5px; height: 14px;
+  background: var(--emerald);
   animation: blink 1s infinite;
   vertical-align: middle;
   margin-left: 2px;
+  border-radius: 1px;
 }
 
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
+/* ── vital bar fill (shimmer on update) ───────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+.vital-bar-fill {
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out 1;
+}
+
+/* ── scrollbars ───────────────────────────────────────────────────────────── */
+.scrollbar-thin::-webkit-scrollbar { width: 3px; height: 3px; }
+.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+.scrollbar-thin::-webkit-scrollbar-thumb:hover { background: rgba(16,185,129,0.3); }
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--bg-void); }
+::-webkit-scrollbar-thumb { background: #1a1a1a; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #2a2a2a; }
+
+/* ── slow spin utility ────────────────────────────────────────────────────── */
+@keyframes spin-slow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.animate-spin-slow { animation: spin-slow 3s linear infinite; }
+
+/* ── prose tweaks ─────────────────────────────────────────────────────────── */
+.prose pre { overflow-x: auto; }
+.prose code::before, .prose code::after { content: none !important; }
+
+/* ── Token Usage Pill ──────────────────────────────────────────────────────── */
+.token-usage-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 20px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.45);
+  margin: 6px 0;
+  font-family: 'JetBrains Mono', monospace;
+}
+.token-label {
+  color: rgba(255,255,255,0.25);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 10px;
+}
+.token-stat {
+  color: rgba(255,255,255,0.6);
+}
+.token-cached {
+  color: #4ade80;
+  font-size: 10px;
+}
+.token-divider {
+  color: rgba(255,255,255,0.2);
 }
