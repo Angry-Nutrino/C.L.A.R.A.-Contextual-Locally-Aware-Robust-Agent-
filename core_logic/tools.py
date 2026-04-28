@@ -5,7 +5,7 @@ from tavily import TavilyClient
 from dotenv import load_dotenv
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
-# from rag import DB_PATH
+from .session_logger import slog
 import os
 
 load_dotenv()  # Load once at module level
@@ -15,8 +15,8 @@ RAG_ENGINE= None
 current_dir = os.path.dirname(os.path.abspath(__file__))
 DB_PATH=os.path.join(current_dir, "knowledge_base")
 
-# Pre-loading rag for faster inference. 
-print("   [Archive] 🔌 Pre-loading RAG Engine for instant access...")
+# Pre-loading rag for faster inference.
+slog.info("   [Archive] Pre-loading RAG Engine for instant access...")
 _embeddings = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2",
     model_kwargs={"device": "cpu"}  # RAG on CPU — VRAM reserved for agent MiniLM + Phi3
@@ -24,15 +24,93 @@ _embeddings = HuggingFaceEmbeddings(
 
 if os.path.exists(DB_PATH):
     RAG_ENGINE = FAISS.load_local(
-        DB_PATH, 
-        _embeddings, 
-        allow_dangerous_deserialization=True 
+        DB_PATH,
+        _embeddings,
+        allow_dangerous_deserialization=True
     )
-    print("   [Archive] ✅ RAG Engine is Hot.")
+    slog.info("   [Archive] RAG Engine is Hot.")
 else:
     RAG_ENGINE = None
-    print("   [Archive] ⚠️ DB Not found. RAG will be disabled.")
+    slog.info("   [Archive] DB Not found. RAG will be disabled.")
 
+
+def reload_rag_engine() -> bool:
+    """
+    Reload the FAISS index from disk into the global RAG_ENGINE.
+    Called after a successful rag_rebuild background task.
+    Returns True on success, False on failure.
+    """
+    global RAG_ENGINE
+    try:
+        if os.path.exists(DB_PATH):
+            RAG_ENGINE = FAISS.load_local(
+                DB_PATH,
+                _embeddings,
+                allow_dangerous_deserialization=True,
+            )
+            slog.info("   [Archive] RAG Engine reloaded from disk.")
+            return True
+        else:
+            slog.warning("   [Archive] DB not found during reload.")
+            return False
+    except Exception as e:
+        slog.error(f"   [Archive] Reload failed: {e}")
+        return False
+
+
+def get_archive_context(q_emb_cpu, query: str, threshold: float = 0.35) -> str:
+    """
+    Relevance-gated archive lookup using a pre-computed MiniLM embedding.
+    q_emb_cpu: CPU-side torch tensor (384-dim) from agent._encode().
+    threshold: minimum cosine similarity to inject (0.35 = reasonably relevant).
+    Returns a formatted [ARCHIVE CONTEXT] string, or "" if nothing relevant found.
+
+    Uses the FAISS index directly with a numpy vector — avoids the langchain
+    similarity_search() path which requires re-encoding the query string.
+    """
+    global RAG_ENGINE
+    if RAG_ENGINE is None:
+        return ""
+
+    try:
+        import numpy as np
+        # Convert torch tensor → numpy float32 array for FAISS
+        q_np = q_emb_cpu.numpy().astype("float32").reshape(1, -1)
+
+        # FAISS inner product search (index is L2-normalised → equivalent to cosine)
+        scores, indices = RAG_ENGINE.index.search(q_np, k=3)
+
+        # scores[0] are inner-product scores; for normalised vectors, range is [-1, 1]
+        best_score = float(scores[0][0]) if len(scores[0]) > 0 else 0.0
+        if best_score < threshold:
+            return ""
+
+        # Retrieve the actual documents for the top indices
+        chunks = []
+        id_map = RAG_ENGINE.index_to_docstore_id
+        for i, (score, idx) in enumerate(zip(scores[0], indices[0])):
+            if idx == -1 or float(score) < threshold:
+                continue
+            doc_id = id_map.get(int(idx))
+            if doc_id is None:
+                continue
+            doc = RAG_ENGINE.docstore._dict.get(doc_id)
+            if doc:
+                chunks.append(doc.page_content.strip())
+
+        if not chunks:
+            return ""
+
+        block = "\n[ARCHIVE CONTEXT]:\n"
+        for i, chunk in enumerate(chunks):
+            block += f"[{i+1}] {chunk}\n"
+        block += "[END ARCHIVE]\n"
+        return block
+
+    except Exception as e:
+        from .session_logger import slog
+        slog.warning(f"   [Archive] Context injection failed: {e}")
+        return ""
 
 
 def run_python_code(code: str) -> str:
@@ -77,7 +155,7 @@ def consult_archive(query: str) -> str:
     
     if RAG_ENGINE is None:
         if os.path.exists(DB_PATH):
-            print("   [Archive] 🔌 Loading Vector Database into RAM...")
+            slog.info("   [Archive] Loading Vector Database into RAM...")
             embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
             RAG_ENGINE = FAISS.load_local(
                 DB_PATH, 
@@ -87,7 +165,7 @@ def consult_archive(query: str) -> str:
         else:
             return "Error: Knowledge base not found. Please run 'rag.py' first."
     
-    print(f"   [Archive] 🧠 Searching for: '{query}'")
+    slog.debug(f"   [Archive] Searching for: '{query}'")
     results = RAG_ENGINE.similarity_search(query, k=3)
     
     # Pro-tip: Join with a separator so the LLM knows where one chunk ends and another begins
@@ -214,18 +292,66 @@ def set_xai_client(client) -> None:
     _xai_client_ref = client
 
 
+_VISION_TEXT_KEYWORDS = (
+    "read", "text", "code", "number", "exact", "ocr",
+    "written", "says", "write", "characters", "digits",
+)
+
+def _pick_detail(question: str) -> str:
+    """
+    Auto-select vision detail level based on question intent.
+    Text/code reading → high (needs tile-level resolution).
+    Layout/visual description → low (3-4× faster, saves 2-5s).
+    """
+    q = question.lower()
+    if any(kw in q for kw in _VISION_TEXT_KEYWORDS):
+        return "high"
+    return "low"
+
+
+def _compress_image(path: pathlib.Path) -> tuple[str, str]:
+    """
+    Compress image to JPEG at 85% quality, resize to ≤1280px wide.
+    Returns (base64_string, media_type).
+    Falls back to raw PNG encoding if Pillow is not available.
+    """
+    try:
+        from PIL import Image as PILImage
+        import io
+        img = PILImage.open(path).convert("RGB")
+        # Resize if wider than 1280px
+        if img.width > 1280:
+            ratio = 1280 / img.width
+            img = img.resize(
+                (1280, int(img.height * ratio)),
+                PILImage.LANCZOS,
+            )
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85, optimize=True)
+        return base64.b64encode(buf.getvalue()).decode("utf-8"), "image/jpeg"
+    except ImportError:
+        # Pillow not installed — fall back to raw bytes
+        return base64.b64encode(path.read_bytes()).decode("utf-8"), "image/jpeg"
+    except Exception:
+        return base64.b64encode(path.read_bytes()).decode("utf-8"), "image/jpeg"
+
+
 def analyze_image_grok(
     client,
     path: str,
     question: str = "Describe what you see in this image in detail.",
-    detail: str = "high",
+    detail: str = "auto",
 ) -> str:
     """
     Analyze an image using Grok Vision API.
-    Reads image from local path, encodes as base64, sends to Grok.
-    Supports: jpg, jpeg, png, gif, webp.
+    Reads image from local path, compresses to JPEG (≤1280px, 85% quality),
+    auto-selects detail level based on question intent.
+    detail="auto" → _pick_detail() selects "high" for text/code, "low" otherwise.
+    detail="high"/"low" → forces that level explicitly.
     Returns description string or error message.
     """
+    if client is None:
+        return "Error: Vision client not initialized. Try again in a moment."
     try:
         p = pathlib.Path(path.strip().strip('"').strip("'"))
         if not p.exists():
@@ -233,20 +359,14 @@ def analyze_image_grok(
         if not p.is_file():
             return f"Error: Path is not a file: {path}"
 
-        ext = p.suffix.lower()
-        media_types = {
-            ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-            ".png": "image/png",  ".gif": "image/gif",
-            ".webp": "image/webp",
-        }
-        media_type = media_types.get(ext, "image/jpeg")
+        resolved_detail = _pick_detail(question) if detail == "auto" else detail
 
-        b64 = base64.b64encode(p.read_bytes()).decode("utf-8")
+        b64, media_type = _compress_image(p)
         data_url = f"data:{media_type};base64,{b64}"
 
         from xai_sdk.chat import user, image as sdk_image
         llm = client.chat.create(model="grok-4-1-fast-non-reasoning")
-        llm.append(user(sdk_image(data_url, detail=detail), question))
+        llm.append(user(sdk_image(data_url, detail=resolved_detail), question))
         response = llm.sample()
         return response.content.strip()
 

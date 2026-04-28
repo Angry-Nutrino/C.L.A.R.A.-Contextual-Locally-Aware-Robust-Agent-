@@ -26,7 +26,7 @@ class TaskNotFoundError(Exception):
 
 VALID_TRANSITIONS: dict = {
     "pending":     {"active", "invalidated"},
-    "active":      {"running", "invalidated"},
+    "active":      {"running", "paused", "invalidated"},
     "running":     {"paused", "completed", "failed"},
     "paused":      {"active", "invalidated"},
     "failed":      {"active"},
@@ -209,6 +209,41 @@ class TaskGraph:
     def get_task(self, task_id: str):
         """Return Task from in-memory dict, or None if not found."""
         return self._tasks.get(task_id)
+
+    def pause_task(self, task_id: str, checkpoint: dict) -> Task:
+        """
+        Pause a running or active task. Persists only serializable metadata
+        (state, checkpoint timestamp, reason) — never tries to serialize
+        function references, asyncio futures, or callback objects from context.
+
+        The checkpoint dict must contain only JSON-serializable primitives.
+        Raises TaskNotFoundError if task not found.
+        """
+        task = self._tasks.get(task_id)
+        if task is None:
+            raise TaskNotFoundError(f"Task '{task_id}' not found in the graph.")
+
+        # Only pause tasks that are actually running or active
+        if task.state not in ("running", "active"):
+            return task
+
+        task.state = "paused"
+        task.last_updated = self._now()
+
+        # Store only the serializable checkpoint fields — never the full context
+        # Context may contain asyncio futures, callbacks, etc. that cannot be serialized
+        safe_checkpoint = {
+            k: v for k, v in checkpoint.items()
+            if isinstance(v, (str, int, float, bool, type(None)))
+        }
+
+        self._conn.execute(
+            "UPDATE tasks SET state = ?, last_updated = ? WHERE id = ?",
+            ("paused", task.last_updated, task_id),
+        )
+        self._conn.commit()
+        slog.info(f"[TaskGraph] Task {task_id[:8]}: state → paused")
+        return task
 
     def update_state(self, task_id: str, new_state: str) -> Task:
         """

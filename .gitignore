@@ -40,6 +40,8 @@ faiss_index.bin
 faiss_index.pkl
 *.db
 *.sqlite3
+../CLARA_PERSONA_CONDENSED.md
+../CLARA_PERSONA.md
 
 core_logic/knowledge_base/
 core_logic/docs/

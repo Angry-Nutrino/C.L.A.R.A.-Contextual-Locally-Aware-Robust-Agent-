@@ -30,10 +30,26 @@ class Orchestrator:
         self._conflict_detector  = ConflictDetector()
         self._arbitration_engine = ArbitrationEngine()
         self._tracer = tracer
+        self._broadcast_fn = None  # injected by api.py after startup — avoids circular import
 
     def _trace(self, event: str, **fields) -> None:
         if self._tracer:
             self._tracer.emit(event, **fields)
+
+    async def _broadcast_task(self, state: str, task) -> None:
+        """Broadcast task state change to all connected WebSocket clients.
+        _broadcast_fn is injected by api.py at startup to avoid circular imports."""
+        try:
+            if self._broadcast_fn:
+                await self._broadcast_fn(
+                    task_id=task.id,
+                    goal=task.goal,
+                    state=state,
+                    priority=task.priority,
+                    source=task.origin,
+                )
+        except Exception as e:
+            slog.warning(f"   [Broadcast] task_event failed: {e}")
 
     # ------------------------------------------------------------------ public
 
@@ -158,10 +174,14 @@ class Orchestrator:
                             )
                             # Task already exists in SQLite (write-ahead).
                             # _dispatch_ready_tasks will pick it up on the next tick.
+                        elif tg_task and tg_task.state in ("completed", "failed", "invalidated"):
+                            # Normal for background tasks that completed and re-fired —
+                            # the scheduler creates a new task on the next cycle.
+                            pass
                         else:
-                            slog.warning(
+                            slog.debug(
                                 f"[Orchestrator] system_trigger '{trigger}' "
-                                f"— task_id '{task_id}' not found or not pending."
+                                f"— task_id '{task_id}' already completed (normal for background tasks)."
                             )
                     else:
                         slog.warning(
@@ -207,6 +227,7 @@ class Orchestrator:
         # These are never persisted to SQLite — futures and callbacks are transient.
         task.context["on_step_update"] = on_step_update
         task.context["response_future"] = future
+        await self._broadcast_task("pending", task)
 
         self._trace(
             "task_created",
@@ -216,6 +237,19 @@ class Orchestrator:
             priority=task.priority,
             reversibility=task.reversibility,
         )
+
+        # If another user task is already running, queue this one behind it.
+        # Background tasks (origin=system) run in parallel and are unaffected.
+        running_user_tasks = [
+            t for t in self._task_graph.get_tasks_by_state("running")
+            if t.origin == "user"
+        ]
+        if running_user_tasks:
+            task.priority = 0.95
+            slog.info(
+                f"[Orchestrator] User task queued behind running task "
+                f"{running_user_tasks[0].id[:8]} — priority set to 0.95"
+            )
 
         # Signal interrupt — pause lower-priority running work before dispatching
         self._interrupt = True
@@ -435,6 +469,10 @@ class Orchestrator:
                 slog.error(f"[Orchestrator] Failed to pause task {task_id[:8]}: {e}")
                 continue
 
+            # Cancel the asyncio worker so it actually stops executing
+            worker_task.cancel()
+            self._active_workers.pop(task_id, None)
+
             # Log pause to episodic memory for CLARA's passive awareness
             try:
                 self._agent.log_system_episode(
@@ -484,6 +522,7 @@ class Orchestrator:
         """Execute a task via the ReAct loop (user) or background worker (system)."""
         try:
             self._task_graph.update_state(task.id, "running")
+            await self._broadcast_task("running", task)
             self._trace(
                 "worker_start",
                 task_id=task.id[:8],
@@ -500,6 +539,7 @@ class Orchestrator:
                 SIMPLE_TRIGGERS = {
                     "memory_maintenance", "context_warmup", "health_check",
                     "file_change", "memory_growth", "interaction_density",
+                    "rag_rebuild",
                 }
 
                 if trigger in SIMPLE_TRIGGERS:
@@ -550,6 +590,7 @@ class Orchestrator:
                 origin=task.origin,
                 result_preview=str(result)[:100] if result else "",
             )
+            await self._broadcast_task("completed", task)
             await self._event_queue.emit(make_event(
                 type="task_completed",
                 payload={"task_id": task.id, "result": result},
@@ -558,6 +599,7 @@ class Orchestrator:
             ))
         except Exception as e:
             slog.error(f"[Orchestrator] Worker failed for task {task.id[:8]}: {e}")
+            await self._broadcast_task("failed", task)
             self._trace(
                 "worker_failed",
                 task_id=task.id[:8],

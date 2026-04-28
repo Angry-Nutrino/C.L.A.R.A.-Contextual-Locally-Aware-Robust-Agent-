@@ -196,7 +196,7 @@ class crud:
         }
         self.memory["episodic_log"].append(entry)
         self._save_memory()
-        print(f"   [Memory] 📝 Logged to Stream: {summary[:50]}...")
+        print(f"   [Memory] Logged to Stream: {summary[:50]}...")
 
     def add_episodic_entry(self, summary: str, encode_callback=None):
         """

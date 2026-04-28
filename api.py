@@ -24,6 +24,8 @@ from core_logic.tracer import Tracer
 from core_logic.tools import set_task_graph, set_xai_client
 from core_logic.session_logger import init_session_log, slog
 from core_logic.bench_logger import init_bench_log, close_bench_log
+from core_logic.tool_registry import ToolRegistry
+from core_logic.mcp_client import MCPClient, MCPError
 
 # Start session log before anything else
 init_session_log()
@@ -36,7 +38,31 @@ orchestrator: Orchestrator | None = None
 scheduler: BackgroundScheduler | None = None
 env_watcher: EnvironmentWatcher | None = None
 tracer: Tracer | None = None
+tool_registry: ToolRegistry | None = None
+mcp_client: MCPClient | None = None
 active_connections: set = set()  # live WebSocket connections — used for speaking_start/stop broadcast
+
+async def broadcast_task_event(task_id: str, goal: str, state: str, priority: float = 0.5, source: str = "system"):
+    """Broadcast task state changes to all connected clients for the task board."""
+    global active_connections
+    if not active_connections:
+        return
+    payload = {
+        "type": "task_event",
+        "task_id": task_id,
+        "goal": goal,
+        "state": state,
+        "priority": priority,
+        "source": source,
+    }
+    dead = set()
+    for ws in active_connections:
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            dead.add(ws)
+    if dead:
+        active_connections -= dead
 
 
 @asynccontextmanager
@@ -58,6 +84,7 @@ async def lifespan(app: FastAPI):
     event_queue = EventQueue()
     orchestrator = Orchestrator(clara, event_queue, task_graph, tracer=tracer)
     await orchestrator.start()
+    orchestrator._broadcast_fn = broadcast_task_event  # inject callback — avoids circular import
     slog.info("[API] Orchestrator running.")
     scheduler = BackgroundScheduler(task_graph, event_queue, clara)
     await scheduler.start()
@@ -67,16 +94,61 @@ async def lifespan(app: FastAPI):
         event_queue=event_queue,
         agent=clara,
         event_loop=asyncio.get_event_loop(),
-        watch_paths=["core_logic/"],
+        watch_paths=[
+            "core_logic/",
+            "CLAUDE.md",
+            "briefs/ROADMAP.md",
+        ],
     )
     await env_watcher.start()
     slog.info("[API] EnvironmentWatcher running.")
+
+    # Build/verify RAG knowledge base at startup
+    try:
+        from core_logic.rag_db_builder import build_knowledge_base
+        from core_logic.tools import reload_rag_engine
+        slog.info("[API] Building RAG knowledge base...")
+        await asyncio.to_thread(build_knowledge_base)
+        reload_rag_engine()
+        slog.info("[API] RAG knowledge base ready.")
+    except Exception as e:
+        slog.error(f"[API] RAG build failed at startup: {e}")
+
+    # ── Tool Registry + MCP Client ────────────────────────────────────────────
+    global tool_registry, mcp_client
+
+    tool_registry = ToolRegistry()
+    tool_registry.register_native_tools()
+
+    mcp_client = MCPClient()
+
+    dc_node = os.getenv("DC_NODE_PATH", "")
+    dc_cli  = os.getenv("DC_CLI_PATH", "")
+
+    if dc_node and dc_cli and os.path.exists(dc_node) and os.path.exists(dc_cli):
+        try:
+            dc_tools = await mcp_client.connect("desktop_commander", dc_node, [dc_cli])
+            tool_registry.register_server_tools("desktop_commander", dc_tools)
+            slog.info(f"[API] Desktop Commander connected: {len(dc_tools)} tools registered.")
+        except MCPError as e:
+            slog.warning(f"[API] Desktop Commander connection failed: {e}. Continuing without DC tools.")
+    else:
+        slog.warning("[API] DC_NODE_PATH or DC_CLI_PATH not set. DC tools unavailable.")
+
+    await tool_registry.rebuild_embeddings(clara._encode)
+    slog.info(f"[API] Tool registry ready: {tool_registry.tool_count} tools indexed.")
+
+    clara.tool_registry = tool_registry
+    clara.mcp_client = mcp_client
+    slog.info("[API] Tool registry injected into agent.")
 
     yield  # server is live here
 
     # Shutdown
     slog.info("[API] Shutting down CLARA system...")
     close_bench_log()
+    if mcp_client:
+        await mcp_client.disconnect_all()
     await env_watcher.stop()
     slog.info("[API] EnvironmentWatcher stopped.")
     await scheduler.stop()
@@ -102,23 +174,26 @@ async def websocket_endpoint(websocket: WebSocket):
     active_connections.add(websocket)
 
     async def send_update(content: str, type="thought",
-                          turn_id=None, message_id=None):
+                          turn_id=None, message_id=None, extra=None):
         try:
-            await websocket.send_json({
+            payload = {
                 "type": type,
                 "content": content,
                 "turn_id": turn_id,
                 "message_id": message_id,
-            })
+            }
+            if extra:
+                payload["extra"] = extra
+            await websocket.send_json(payload)
         except Exception as e:
             slog.error(f"Error sending update: {e}")
 
     async def handle_message(user_text: str, image_data, message_id: str):
         try:
-            async def on_step(content, type="thought", turn_id=None):
+            async def on_step(content, type="thought", turn_id=None, extra=None):
                 await send_update(
                     content, type=type,
-                    turn_id=turn_id, message_id=message_id
+                    turn_id=turn_id, message_id=message_id, extra=extra
                 )
             response = await orchestrator.submit_user_event(
                 text=user_text,
@@ -194,7 +269,10 @@ async def get_soul():
 
             tools = user.get("preferences", {}).get("tools", [])
             interests = user.get("interests", [])
-            profile["skills"] = (tools + interests)[:8]
+            profile["skills"] = (tools + interests)[:8] or [
+                "Python (AsyncIO)", "React + Vite", "FastAPI",
+                "Grok API", "Docker", "Generative AI"
+            ]
 
             profile["mission"] = {
                 "current": state.get("current_phase", "Unknown"),
@@ -206,20 +284,32 @@ async def get_soul():
 
     try:
         ram_percent = psutil.virtual_memory().percent
+        cpu_percent = psutil.cpu_percent(interval=0.1)
         cpu_name = platform.processor()
         if "Intel" in cpu_name: cpu_name = "Intel Core i5"
         if "AMD" in cpu_name: cpu_name = "AMD Ryzen 4800H"
 
+        # VRAM via torch if available
+        vram_used_gb, vram_total_gb = 0.0, 4.0
+        try:
+            import torch
+            if torch.cuda.is_available():
+                vram_used_gb  = round(torch.cuda.memory_allocated(0) / 1e9, 2)
+                vram_total_gb = round(torch.cuda.get_device_properties(0).total_memory / 1e9, 1)
+        except Exception:
+            pass
+
         profile["vitals"] = {
-            "cpu": cpu_name,
-            "gpu": "RTX 3050",
+            "cpu":          f"{cpu_percent}%",
+            "cpu_name":     cpu_name,
+            "gpu":          f"{vram_used_gb}GB / {vram_total_gb}GB",
             "memory_usage": f"{ram_percent}%",
-            "status": "ONLINE"
+            "status":       "ONLINE"
         }
     except Exception as e:
         slog.error(f"Vitals Error: {e}")
 
-    return profile
+    return {**profile, "version": "v2.6"}
 
 
 if __name__ == "__main__":

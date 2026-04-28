@@ -126,6 +126,8 @@ async def run_background_task(trigger_name: str, agent, task_graph: TaskGraph, c
         return await _handle_memory_growth(agent)
     elif trigger_name == "interaction_density":
         return await _handle_interaction_density(agent)
+    elif trigger_name == "rag_rebuild":
+        return await _handle_rag_rebuild(ctx)
     else:
         slog.warning(f"[BG] Unknown trigger: {trigger_name}")
         return f"Unknown trigger: {trigger_name}"
@@ -204,6 +206,29 @@ async def _handle_interaction_density(agent) -> str:
         f"Episodes: {episode_count}"
     )
     return f"Interaction density threshold reached. Episodes: {episode_count}"
+
+
+async def _handle_rag_rebuild(ctx: dict) -> str:
+    """
+    Triggered when a watched source file changes (CLAUDE.md, ROADMAP.md,
+    or any file in core_logic/docs/).
+    Runs full rebuild in a thread (CPU-bound), then hot-reloads engine.
+    """
+    from .rag_db_builder import build_knowledge_base
+    from .tools import reload_rag_engine
+
+    trigger_path = ctx.get("path", "unknown")
+    slog.info(f"[BG:rag_rebuild] Source changed: {trigger_path}. Rebuilding...")
+
+    try:
+        result = await asyncio.to_thread(build_knowledge_base)
+        reloaded = reload_rag_engine()
+        status = f"RAG rebuild complete. {result} Engine reloaded: {reloaded}"
+        slog.info(f"[BG:rag_rebuild] {status}")
+        return status
+    except Exception as e:
+        slog.error(f"[BG:rag_rebuild] Rebuild failed: {e}")
+        return f"RAG rebuild failed: {e}"
 
 
 async def _health_check(task_graph: TaskGraph) -> str:

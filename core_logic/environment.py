@@ -26,6 +26,12 @@ IGNORED_PATTERNS: list = [
     "tasks.db-shm",
     ".log",
     "session_",
+    "knowledge_base",   # RAG index output — never trigger rebuild on its own writes
+    ".faiss",
+    ".pkl",
+    ".tmp.",             # Editor temp files (e.g., agent.py.tmp.xxxxx) — ignore, debounce real file
+    ".swp",              # Vim/Neovim swap files
+    ".swo",              # Vim/Neovim swap files (older)
 ]
 
 
@@ -201,6 +207,15 @@ class EnvironmentWatcher:
         if now - self._last_file_change.get(normalised, 0) < 5.0:
             return  # coalesce rapid saves — still processing the previous one
         self._last_file_change[normalised] = now
+
+        # RAG source files → rag_rebuild trigger instead of generic file_change
+        RAG_SOURCES = ("CLAUDE.md", "ROADMAP.md", "/docs/")
+        if any(src in normalised for src in RAG_SOURCES):
+            await self._emit_trigger(
+                trigger_name="rag_rebuild",
+                extra_context={"path": path, "change_type": change_type},
+            )
+            return
 
         await self._emit_trigger(
             trigger_name="file_change",
