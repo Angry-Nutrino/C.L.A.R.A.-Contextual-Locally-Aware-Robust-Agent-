@@ -30,7 +30,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 def _turn_message(current_turn: int, max_turns: int, body: str) -> str:
     """
-    Prepend [Turn N/M] to every observation message so the model knows its budget.
+    Prepend [Turn N/M] to every Glint message so the model knows its budget.
     On the final turn, append a forced wrap-up instruction so the model writes
     Final Answer instead of attempting another Action that will never execute.
     """
@@ -155,14 +155,14 @@ You have access to the following tools:
 Follow this format strictly:
 Thought: Why you are doing what you're doing (1-2 sentences, plain English)
 Action: [{"tool": "tool_name", "param1": "value1", "param2": "value2"}]
-Observation: [Wait for system response]
+Glint: [Wait for system response]
 ... repeat until complete ...
 Final Answer: Your response to Alkama
 
 ### Rules ###
 1. ALWAYS output Thought before any Action.
 2. Batch independent tool calls in one Action array.
-3. Trust observations — do not re-calculate.
+3. Trust Glints — do not re-calculate.
 4. On tool failure, diagnose and correct in the next turn.
 5. Output Final Answer only when you have all needed information.
 6. Never output Final Answer and Action in the same turn.
@@ -176,26 +176,26 @@ Final Answer: Your response to Alkama
 User: List files in core_logic directory.
 Thought: I need to see the directory structure.
 Action: [{"tool": "list_directory", "path": "E:\\ML PROJECTS\\AGENT_ZERO\\core_logic", "depth": 1}]
-Observation: [FILE] agent.py [FILE] orchestrator.py ...
+Glint: [FILE] agent.py [FILE] orchestrator.py ...
 Final Answer: The core_logic directory contains agent.py, orchestrator.py, and others.
 
 User: Write a Python test file.
 Thought: I'll create a test file with the specified content.
-Action: [{"tool": "write_file", "path": "E:\\ML PROJECTS\\AGENT_ZERO\\tests\\test_example.py", "content": "def test_example():\\n    assert True", "mode": "w"}]
-Observation: File written successfully.
+Action: [{"tool": "write_file", "path": "E:\\ML PROJECTS\\AGENT_ZERO\\tests\\test_example.py", "content": "def test_example():\\n    assert True", "mode": "rewrite"}]
+Glint: File written successfully.
 Final Answer: Created test_example.py in the tests directory.
 
 User: Search for Bitcoin price and today's date.
 Thought: These are independent lookups so I can fetch both at once.
 Action: [{"tool": "web_search", "query": "Bitcoin price USD"}, {"tool": "date_time"}]
-Observation from web_search: Bitcoin is $95,000 USD.
-Observation from date_time: 2026-04-27 12:53:55
+Glint from web_search: Bitcoin is $95,000 USD.
+Glint from date_time: 2026-04-27 12:53:55
 Final Answer: Bitcoin is $95,000 USD. Today is April 27, 2026.
 
 User: Calculate compound interest: ₹50,000 at 8% for 5 years.
 Thought: I need exact calculation — use Python.
 Action: [{"tool": "python_repl", "code": "print(round(50000 * (1 + 0.08)**5, 2))"}]
-Observation: 73466.44
+Glint: 73466.44
 Final Answer: ₹50,000 at 8% compounded annually for 5 years grows to ₹73,466.44.
 
 ### Memory ###
@@ -496,7 +496,7 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
             "- DO NOT extract as facts:\n"
             "  * File paths, file counts, file sizes, screenshot metadata, directory listings\n"
             "  * Timestamps, dates of events, or anything time-sensitive\n"
-            "  * Tool outputs or observations (web search results, command output)\n"
+            "  * Tool outputs or Glints (web search results, command output)\n"
             "  * Anything that could be stale within days or weeks\n\n"
             "Output ONLY a JSON object, no extra text:\n"
             "{ \"summary\": \"Alkama asked X. Clara did Y.\", \"facts\": [\"Alkama likes Z\"] }\n"
@@ -1020,7 +1020,7 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
                 elif "Thought:" in raw_content:
                     start_idx = raw_content.find("Thought:") + 8
                     current_thought = raw_content[start_idx:].strip()
-                    clean_thought = re.split(r'\n?(?:Action|Final Answer|Observation):?', current_thought)[0].strip()
+                    clean_thought = re.split(r'\n?(?:Action|Final Answer|Glint):?', current_thought)[0].strip()
 
                     if current_thought and on_step_update:
                         await on_step_update(clean_thought, type="thought", turn_id=turn_count)
@@ -1033,24 +1033,39 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
 
             await asyncio.sleep(0.05)  # Small delay to simulate thinking time and allow UI to update
 
-            if "Observation:" in raw_content:
-                slog.warning("   [System] Hallucinated Observation detected — correcting.")
-                response_text = raw_content.split("Observation:")[0].strip()
+            inline_hallucination = False
+            if "Glint:" in raw_content and "Action:" not in raw_content:
+                # Bare fabricated Glint — no Action at all
+                slog.warning("   [System] Hallucinated Glint detected (no Action) — correcting.")
+                response_text = raw_content.split("Glint:")[0].strip()
                 llm.append(assistant(response_text))
                 llm.append(user(
-                    "System: You generated an Observation without calling a tool. "
-                    "Observations can ONLY come from actual tool execution. "
+                    "System: You generated a Glint without calling a tool. "
+                    "Glints can ONLY come from actual tool execution. "
                     "If you need information, call the tool using Action: [...]. "
                     "Do not simulate or assume tool results. Continue with a valid Action."
                 ))
-                turn_count += 1
                 continue
+            elif "Glint:" in raw_content and "Action:" in raw_content:
+                # Inline fabrication — model wrote Action then immediately invented the Glint
+                # in the same token stream without waiting for system execution.
+                # Strip everything from the first Glint: onward, keep only the real Action.
+                slog.warning("   [System] Inline hallucination detected (Action + fabricated Glint in same turn) — stripping fabricated Glint.")
+                response_text = raw_content.split("Glint:")[0].strip()
+                inline_hallucination = True
             else:
                 response_text = raw_content.strip()
 
             last_response_text = response_text
             slog.info(f"Clara (Task turn {turn_count}):\n{response_text}")
             llm.append(assistant(response_text))
+
+            if inline_hallucination:
+                llm.append(user(
+                    "System: You generated a Glint before the system executed your Action. "
+                    "Glints are ONLY produced by the system after real tool execution — never by you. "
+                    "The fabricated Glint was discarded. Your Action is being executed now — wait for the real Glint."
+                ))
 
             if "Final Answer:" in response_text:
                 final = response_text.split("Final Answer:")[-1].strip()
@@ -1082,11 +1097,11 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
                 valid_actions = [a for a in actions if a.get("tool")]
                 failed_actions = [a for a in actions if not a.get("tool")]
 
-                # Log failed extractions to observation
-                observations = []
+                # Log failed extractions to glints
+                glints = []
                 for f in failed_actions:
                     msg = f"System: Action extraction failed — {f.get('error', 'unknown reason')}. Skipped."
-                    observations.append(msg)
+                    glints.append(msg)
                     slog.warning(f"   [Parser] Action extraction failed: {msg}")
 
                 # Execute all valid actions in parallel
@@ -1110,14 +1125,14 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
                 if valid_actions:
                     results = await asyncio.gather(*[execute_tool(a) for a in valid_actions])
                     for action, result in zip(valid_actions, results):
-                        obs = f"Observation from {action['tool']}[{action['query']}]: {result}"
-                        observations.append(obs)
-                        slog.info(f"   -> Obs: {obs[:120]}...")
-                        slog.debug(f">> [Observation] {action['tool']}:\n{result}")
+                        glint = f"Glint from {action['tool']}[{action['query']}]: {result}"
+                        glints.append(glint)
+                        slog.info(f"   -> Glint: {glint[:120]}...")
+                        slog.debug(f">> [Glint] {action['tool']}:\n{result}")
 
-                # Feed all observations back as a single combined message
-                combined_observation = "\n".join(observations)
-                llm.append(user(_turn_message(turn_count, max_turns, combined_observation)))
+                # Feed all Glints back as a single combined message
+                combined_glints = "\n".join(glints)
+                llm.append(user(_turn_message(turn_count, max_turns, combined_glints)))
 
             else:
                 llm.append(user(_turn_message(turn_count, max_turns, "System: No valid Action found. Please continue.")))

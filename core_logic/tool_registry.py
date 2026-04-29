@@ -43,7 +43,8 @@ NATIVE_TOOL_SCHEMAS = [
         "description": (
             "Execute Python code. Use for calculations, data transformation, "
             "structured processing, or any task requiring computation. "
-            "Always print output."
+            "Always print output. "
+            "Do NOT use for file I/O — use read_file/write_file for reading or writing files."
         ),
         "inputSchema": {
             "type": "object",
@@ -302,9 +303,9 @@ def format_tool_schemas_for_context(schemas: list, tag: str = "DISCOVERED_TOOLS"
     return "\n".join(lines)
 
 
-def format_tool_schemas_for_observation(schemas: list) -> str:
+def format_tool_schemas_for_glint(schemas: list) -> str:
     """
-    Format tool schemas as a DELIBERATE Observation string.
+    Format tool schemas as a DELIBERATE Glint string.
     Used when tool_search is called as a tool within the ReAct loop.
     Compact — includes enough for the model to immediately make a tool call.
     """

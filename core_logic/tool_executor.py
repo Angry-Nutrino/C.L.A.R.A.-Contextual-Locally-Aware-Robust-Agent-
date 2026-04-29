@@ -141,13 +141,13 @@ async def execute_deliberate(
             if encode_fn is None:
                 return "Encoding function unavailable for tool_search."
             import torch
-            from .tool_registry import format_tool_schemas_for_observation
+            from .tool_registry import format_tool_schemas_for_glint
             q_emb = await encode_fn(query, convert_to_tensor=True)
             q_emb_cpu = q_emb.to("cpu")
             if q_emb_cpu.dim() == 1:
                 q_emb_cpu = q_emb_cpu.unsqueeze(0)
             schemas = registry.search(q_emb_cpu, top_k=4)
-            return format_tool_schemas_for_observation(schemas)
+            return format_tool_schemas_for_glint(schemas)
 
         elif tool_name == "web_search":
             (q,) = _extract_param(query, "query")
@@ -271,8 +271,13 @@ def _build_args_from_query(tool_name: str, query: str, schema) -> dict:
         "start_process":         {"timeout_ms": 10000},
         "read_process_output":   {"timeout_ms": 5000},
         "interact_with_process": {"timeout_ms": 8000},
-        "list_directory":        {"depth": 2},
+        "list_directory":        {"depth": 0},
         "write_file":            {"mode": "rewrite"},
+    }
+
+    # Normalize known wrong values regardless of how args arrived.
+    TOOL_ARG_NORMALIZERS = {
+        "write_file": {"mode": {"w": "rewrite", "a": "append"}},
     }
 
     stripped = query.strip()
@@ -283,6 +288,9 @@ def _build_args_from_query(tool_name: str, query: str, schema) -> dict:
             for arg, default_val in TOOL_ARG_DEFAULTS.get(tool_name, {}).items():
                 if arg not in parsed:
                     parsed[arg] = default_val
+            for arg, mapping in TOOL_ARG_NORMALIZERS.get(tool_name, {}).items():
+                if arg in parsed and parsed[arg] in mapping:
+                    parsed[arg] = mapping[parsed[arg]]
             return parsed
         except json.JSONDecodeError as e:
             slog.warning(f"   [Executor] '{tool_name}' JSON parse failed: {e}. Falling back to flat string.")

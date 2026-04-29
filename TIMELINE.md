@@ -340,10 +340,107 @@ Fix G — Orchestrator system_trigger log spam:
 
 ---
 
+## 2026-04-28
+
+[FIX] TOOL_ARG_DEFAULTS not applied in JSON parse path (tool_executor.py)
+- `TOOL_ARG_DEFAULTS` block was positioned after the JSON early-return, so when the model
+  explicitly passed JSON args, defaults were never injected.
+- Hoisted `TOOL_ARG_DEFAULTS` dict above the JSON parse branch and applied it inside the
+  JSON branch too: fills missing args only, never overwrites explicit values.
+- Affected tools: write_file (mode), start_process (timeout_ms), read_process_output (timeout_ms),
+  interact_with_process (timeout_ms), list_directory (depth).
+
+[FIX] write_file "w" mode normalization (tool_executor.py)
+- Model generates `"mode": "w"` from Python training priors. Desktop Commander requires
+  `"rewrite"` | `"append"` — `"w"` causes a silent rejection.
+- Added `TOOL_ARG_NORMALIZERS` dict in `_build_args_from_query`. Applied after JSON parse:
+  maps `"w"` → `"rewrite"`, `"a"` → `"append"`. Explicit override — fires even when model
+  provides the arg, unlike defaults which only fill missing values.
+
+[FIX] Hallucination handler double-increment (agent.py)
+- When hallucination detected, the handler did `turn_count += 1` before `continue`, then
+  the loop's own `turn_count += 1` fired on the next iteration. Net: 2 turns burned per
+  hallucination event (Loop 1 → Loop 3).
+- Removed the extra `turn_count += 1` from the hallucination handler. Detection now burns
+  exactly 1 turn.
+
+[FIX] Observation → Glint rename — DELIBERATE loop coin token (agent.py)
+- Coined custom token "Glint" to replace "Observation" everywhere in the ReAct loop.
+- Root cause: "Observation:" is a strongly learned bigram in ReAct training data. Model
+  pattern-completes `Action: [...]\nObservation:` from prior, hallucinating tool results
+  before the tool actually runs.
+- "Glint" has zero training prior as a ReAct token — hallucination pressure near zero.
+- Changes in agent.py:
+  - Regex in thought extraction: `Observation` → `Glint`
+  - Hallucination detector: checks for `Glint:` without preceding `Action:`, corrects with
+    updated message referencing Glint
+  - Loop variables: `observations` → `glints`, `obs` → `glint`, `combined_observation` → `combined_glints`
+  - Log strings: `Obs:` → `Glint:`, `[Observation]` → `[Glint]`
+  - Comment: "Feed all observations" → "Feed all Glints"
+- Changes in system_prompt.py (both SYSTEM_PROMPT and TEMP_SYSTEM_PROMPT):
+  - All `Observation:` lines in execution loop format → `Glint:`
+  - `Trust observations.` → `Trust Glints.`
+  - `After each observation:` → `After each Glint:`
+- Changes in tool_registry.py: `format_tool_schemas_for_observation` → `format_tool_schemas_for_glint`
+- Changes in tool_executor.py: import and call updated to `format_tool_schemas_for_glint`
+
+[FIX] Inline hallucination detector — Action + fabricated Glint in same turn (agent.py)
+- Stress test (20 queries, 2026-04-28) revealed 4/5 hallucination failures shared one pattern:
+  model writes `Action: [...]` then immediately generates fake `Glint:` content in the same
+  token stream, before the system executes anything. The existing detector condition
+  (`"Glint:" in content and "Action:" not in content`) missed all of these because Action WAS present.
+- Added `elif "Glint:" in raw_content and "Action:" in raw_content` branch:
+  strips `raw_content` from the first `Glint:` onward, sets `inline_hallucination = True`,
+  falls through to real `parse_actions()` on the truncated (clean) response.
+- After appending the truncated assistant message, injects a corrective user message:
+  "fabricated Glint was discarded — your Action is being executed now, wait for the real Glint."
+- Model then receives the real system-generated Glint and continues correctly.
+- Does not increment turn count — hallucination costs 0 extra turns on this path.
+
+[UPDATE] DELIBERATE loop quality improvements (agent.py, system_prompt.py)
+- Rule 4 replaced with structured error taxonomy: Recoverable / Tool-not-found /
+  Genuinely-impossible. Prevents model from treating recoverable errors as dead ends.
+- Thought description rewritten in both prompts: explicit guidance for post-Glint reasoning,
+  post-failure classification, and pre-Final-Answer completion check.
+- Rule 11 tightened: "Once all sub-tasks are resolved — write Final Answer immediately."
+- Rule 16 added to both prompts: COMPLETION CHECK before Final Answer.
+- `_turn_message()` helper added in agent.py: prefixes every Glint message with `[Turn N/8]`.
+  On final turn, appends `[FINAL TURN]` wrap-up instruction — forces conclusion instead of
+  burning the last turn on another tool call.
+- Turn budget initializer: `llm.append(user("[SYSTEM MODE: TASK] [Turn 1/8] ..."))`
+- `last_response_text` tracked per-turn: fallback return gives the user the last model output
+  instead of a canned "I ran out of steps" message.
+
+---
+
 ## Statistics
 
 - **Commits:** 25+ (from 2025-12-24 to 2026-04-24)
 - **Briefs:** 24 (Brief 0 through Brief 23, numbered consecutively)
+---
+
+## 2026-04-29
+
+[FIX] list_directory chunk-limit — root cause in system prompt examples (system_prompt.py, tool_executor.py)
+- Stress test Q18 root cause traced: `depth: 1` was not in DC's list_directory schema at all
+  (schema only exposes `path`). CLARA learned it from the Rule 14 example in SYSTEM_PROMPT:
+  `Action: [{"tool": "list_directory", "path": "...", "depth": 1}]` — model pattern-matched
+  from its own prompt. DC accepts unknown params silently; depth=1 descends into __pycache__,
+  models/, knowledge_base/, moondream_brain/ and overflows the stdio buffer on dense directories.
+  The read_file chunk error in the same batch was collateral — DC's framing corrupted by the
+  oversized list_directory response, not by the file being absent.
+- Fix 1 (system_prompt.py): Removed `depth: 1` from both list_directory examples in
+  SYSTEM_PROMPT (Rule 14 correct example + Examples section). Model no longer learns this pattern.
+- Fix 2 (system_prompt.py): Added chunk-limit as a fourth error class in Rule 4 ERROR CLASSIFICATION
+  in both SYSTEM_PROMPT and TEMP_SYSTEM_PROMPT. When "chunk exceed the limit" appears, CLARA
+  retries the same tool on the same path with reduced scope (omit depth, narrower subpath, or
+  specific filename) — not by changing paths or treating it as a missing file.
+- Fix 3 (tool_executor.py): `TOOL_ARG_DEFAULTS` had `list_directory: {depth: 2}` — worse than
+  the prompt example, silently injecting depth=2 whenever the model omitted depth entirely.
+  Changed to `depth: 0`. Model can still pass an explicit depth when genuinely needed.
+- Capability preserved: CLARA can still use depth when genuinely needed. The fix is behavioral
+  (learn from the right example, recover correctly from chunk-limit) not a hard gate.
+
 - **Native tools:** 6 (web_search, python_repl, date_time, vision_tool, consult_archive, query_task_status)
 - **MCP tools (Desktop Commander):** 26
 - **Total registry tools:** 32 (tool_search is injected to DELIBERATE, not registered)

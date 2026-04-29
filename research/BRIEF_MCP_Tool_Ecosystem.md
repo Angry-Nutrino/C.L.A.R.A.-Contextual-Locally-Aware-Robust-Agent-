@@ -94,24 +94,19 @@ Tools currently available to CLARA:
 | consult_archive | 50–150ms | Good | Limited to indexed static docs |
 | vision_tool | 1–3s (API) | Good | File path only; no live capture |
 | date_time | <1ms | Perfect | No scheduling awareness |
-| query_task_status | <20ms | Good | Read-only |
+| query_task_status | &lt;20ms | Good | Read-only |
 
-Overall RAM footprint of current tool layer at idle: ~200–300 MB
-(FAISS index + MiniLM CPU instance in tools.py + LangChain embeddings).
+Overall RAM footprint of current tool layer at idle: \~200–300 MB (FAISS index + MiniLM CPU instance in [tools.py](http://tools.py) + LangChain embeddings).
 
 ---
 
 ## Gap Analysis: What CLARA Cannot Currently Do
 
-The following capability domains are entirely absent from CLARA's current tool stack.
-Each is required to meaningfully progress toward the ambient autonomous agent vision
-described in ROADMAP.md and OPUS_EVAL_REPORT.md Section 8.
+The following capability domains are entirely absent from CLARA's current tool stack. Each is required to meaningfully progress toward the ambient autonomous agent vision described in [ROADMAP.md](http://ROADMAP.md) and OPUS_EVAL_REPORT.md Section 8.
 
 ### GAP-1: Browser / Web Interaction
-CLARA can search via Tavily but cannot navigate URLs, click, scroll, fill forms,
-authenticate into web services, or scrape structured data from live pages.
-This blocks any task that requires interacting with a web app rather than
-just retrieving a fact.
+
+CLARA can search via Tavily but cannot navigate URLs, click, scroll, fill forms, authenticate into web services, or scrape structured data from live pages. This blocks any task that requires interacting with a web app rather than just retrieving a fact.
 
 ### GAP-2: Communication Layer
 No email read/write, no calendar read/write, no messaging integration.
@@ -131,36 +126,24 @@ No code search (grep-level is available via fs_run_command but not
 semantic/structured), no test runner, no linter access.
 
 ### GAP-5: Search Quality Ceiling
-Tavily is a good general-purpose search tool but has a hard ceiling:
-no raw web access, no news-specific routing, no semantic search over
-the open web, no financial/data API access, no academic paper search.
-For the ambient vision, CLARA needs higher-fidelity information retrieval.
+Tavily is a good general-purpose search tool but has a hard ceiling: no raw web access, no news-specific routing, no semantic search over the open web, no financial/data API access, no academic paper search. For the ambient vision, CLARA needs higher-fidelity information retrieval.
 
 ### GAP-6: Screen / Environment Observation
-CLARA is blind to what is happening on the screen unless an image is
-explicitly sent. No screenshot-and-analyze loop, no clipboard access,
-no notification observation. Required for true ambient awareness.
-Partial coverage exists: `user_profile.environment.known_locations` in
-memory.json holds key path mappings injected into every context as
-`[KNOWN LOCATIONS]` — but this is manually maintained and does not
-observe live screen or system state.
+
+CLARA is blind to what is happening on the screen unless an image is explicitly sent. No screenshot-and-analyze loop, no clipboard access, no notification observation. Required for true ambient awareness. Partial coverage exists: `user_profile.environment.known_locations` in memory.json holds key path mappings injected into every context as `[KNOWN LOCATIONS]` — but this is manually maintained and does not observe live screen or system state.
 
 ### GAP-7: Memory / Knowledge Mutation as a Tool
-CLARA can read her memory passively but has no tool-callable interface
-to deliberately update the vault, update user profile fields, mark
-episodes as important, or prune stale entries. Memory can only be
-mutated through the background consolidation pipeline.
-Note: `known_locations` can be manually edited in memory.json but
-is not callable as a tool from within task execution.
+
+CLARA can read her memory passively but has no tool-callable interface to deliberately update the vault, update user profile fields, mark episodes as important, or prune stale entries. Memory can only be mutated through the background consolidation pipeline. Note: `known_locations` can be manually edited in memory.json but is not callable as a tool from within task execution.
 
 ---
 
 ## Constraints
 
 ### Hardware
-- CPU: AMD Ryzen 7 4800H (8 cores / 16 threads), ~2.9 GHz base
-- RAM: 15.4 GB total. At full working load (VS Code + CLARA + Brave +
-  Chrome + Spotify): ~13.7 GB consumed. Headroom: ~1.5–2.0 GB.
+
+- CPU: AMD Ryzen 7 4800H (8 cores / 16 threads), \~2.9 GHz base
+- RAM: 15.4 GB total. At full working load (VS Code + CLARA + Brave + Chrome + Spotify): \~13.7 GB consumed. Headroom: \~1.5–2.0 GB.
 - GPU: NVIDIA RTX 3050 Laptop, 4 GB GDDR6 VRAM (128-bit bus)
   - At inference: MiniLM ~90 MB + Grok API (cloud, no local VRAM cost)
   - Voice phase will add: Faster-Whisper ~800 MB + Kokoro ~300 MB
