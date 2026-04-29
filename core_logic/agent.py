@@ -11,7 +11,7 @@ from .tools import (
     fs_read_file, fs_list_directory, fs_write_file, fs_run_command,
     query_task_status, get_archive_context,
 )
-from .system_prompt import SYSTEM_PROMPT, CHAT_SYSTEM_PROMPT, PERSONA, TEMP_SYSTEM_PROMPT
+from .system_prompt import SYSTEM_PROMPT, CHAT_SYSTEM_PROMPT, PERSONA
 from .bench_logger import Timer, log_request
 from .interpreter import interpret, TOOL_ARG_SCHEMAS
 from .memory_manager import free_gpu_memory
@@ -107,7 +107,7 @@ def route(interpreted: dict) -> str:
 
 class Clara_Agent:
     def __init__(self, model_name="phi3:mini"):
-        self.system_prompt = TEMP_SYSTEM_PROMPT or """
+        self.system_prompt = SYSTEM_PROMPT or """
 
 ### Role ###
 You are CLARA — Alkama's autonomous agent.

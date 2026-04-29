@@ -175,6 +175,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def send_update(content: str, type="thought",
                           turn_id=None, message_id=None, extra=None):
+        from starlette.websockets import WebSocketState
+        if websocket.client_state != WebSocketState.CONNECTED:
+            return
         try:
             payload = {
                 "type": type,
@@ -186,7 +189,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 payload["extra"] = extra
             await websocket.send_json(payload)
         except Exception as e:
-            slog.error(f"Error sending update: {e}")
+            slog.debug(f"send_update skipped — connection closed: {e}")
 
     async def handle_message(user_text: str, image_data, message_id: str):
         try:

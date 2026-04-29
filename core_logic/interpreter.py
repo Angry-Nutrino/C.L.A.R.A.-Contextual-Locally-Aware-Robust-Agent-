@@ -49,6 +49,10 @@ Routing guidance:
 - Greetings, opinions, conversation → tool=null, requires_planning=false
 - System triggers (health_check, memory_maintenance, etc.) → tool=null, requires_planning=false
   (these are handled by existing background workers, do not assign tools to them)
+- write_file where content must be GENERATED (code, structured text, analysis, class drafts)
+  rather than directly transcribed from the query → requires_planning=true, even if the path
+  is clear. Generating content is always multi-step: compose first, then write.
+  write_file where content IS the query (e.g. "write 'hello world' to file.txt") → requires_planning=false.
 
 web_search — use ONLY when the answer requires live or post-training data:
 - Current prices, rates, scores, weather, news, stock values

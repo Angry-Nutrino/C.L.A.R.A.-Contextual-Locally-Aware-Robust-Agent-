@@ -411,6 +411,25 @@ Fix G — Orchestrator system_trigger log spam:
 - `last_response_text` tracked per-turn: fallback return gives the user the last model output
   instead of a canned "I ran out of steps" message.
 
+[FIX] Interpreter routing — write_file with generated content (interpreter.py)
+- Q18 retest: Interpreter routed "Draft a new class in core_logic/proactive_commit.py" as
+  CHAT (tool=None, requires_planning=False, confidence=0.95). Root cause: routing guidance
+  treated write_file as single-step regardless of whether content exists in the query or must
+  be composed. "Draft" + file path → Interpreter assigned write_file but content was a placeholder
+  → FAST path couldn't generate code → fell through to CHAT.
+- Added rule to routing guidance: write_file where content must be GENERATED (code, structured
+  text, class drafts, analysis) → requires_planning=true even if the path is clear. Generating
+  content is always multi-step: compose first, then write. write_file where content IS the query
+  (e.g. "write 'hello' to file.txt") → requires_planning=false as before.
+
+[UPDATE] list_directory depth guidance in Rule 13 (system_prompt.py)
+- Added explicit depth guidance to Rule 13: omit depth or use 0 by default — immediate contents
+  only, no chunk risk. Only use depth > 0 when subdirectory structure is explicitly needed AND
+  directory is known to be sparse. Dense directories (__pycache__, model weights, indexes) will
+  overflow at depth > 0. Rule 4 chunk-limit handles recovery when it happens.
+- Addresses scale concern: as project grows, more directories become dense. Model now has
+  explicit in-context guidance rather than relying on training priors for depth selection.
+
 ---
 
 ## Statistics
@@ -440,6 +459,21 @@ Fix G — Orchestrator system_trigger log spam:
   Changed to `depth: 0`. Model can still pass an explicit depth when genuinely needed.
 - Capability preserved: CLARA can still use depth when genuinely needed. The fix is behavioral
   (learn from the right example, recover correctly from chunk-limit) not a hard gate.
+
+[REFACTOR] TEMP_SYSTEM_PROMPT promoted to SYSTEM_PROMPT (system_prompt.py, agent.py)
+- Stress test (20 queries, 2026-04-28) ran entirely on TEMP_SYSTEM_PROMPT and validated it.
+- TEMP_SYSTEM_PROMPT is structurally better: no hardcoded tool list (can't go stale), no
+  project-specific path examples, tool_search schema injected inline, cleaner rules throughout.
+- Old SYSTEM_PROMPT deleted. TEMP_SYSTEM_PROMPT renamed to SYSTEM_PROMPT in system_prompt.py.
+- agent.py import and self.system_prompt reference updated accordingly.
+- TEMP_SYSTEM_PROMPT no longer exists as a separate variable.
+
+[UPDATE] Rule 13 search-first pattern — filesystem resolution (system_prompt.py)
+- Old Rule 13: always list_directory first to confirm a path exists.
+- New Rule 13: when given a filename, use start_search first — confirms existence and returns
+  exact path in one call, no chunk-limit risk. Only fall back to list_directory (no depth) if
+  search returns nothing, to check for typos or casing in the parent directory.
+- list_directory is no longer the first move for named file resolution.
 
 - **Native tools:** 6 (web_search, python_repl, date_time, vision_tool, consult_archive, query_task_status)
 - **MCP tools (Desktop Commander):** 26
