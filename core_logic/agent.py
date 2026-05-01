@@ -1031,14 +1031,14 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
                 if turn_usage:
                     deliberate_usage_list.append(turn_usage)
 
-            await asyncio.sleep(0.05)  # Small delay to simulate thinking time and allow UI to update
+            await asyncio.sleep(0.05)  # yield to event loop so UI updates flush before next turn
 
-            inline_hallucination = False
+            pre_glint = raw_content.split("Glint:")[0].strip() if "Glint:" in raw_content else None
+
             if "Glint:" in raw_content and "Action:" not in raw_content:
                 # Bare fabricated Glint — no Action at all
                 slog.warning("   [System] Hallucinated Glint detected (no Action) — correcting.")
-                response_text = raw_content.split("Glint:")[0].strip()
-                llm.append(assistant(response_text))
+                llm.append(assistant(pre_glint))
                 llm.append(user(
                     "System: You generated a Glint without calling a tool. "
                     "Glints can ONLY come from actual tool execution. "
@@ -1048,24 +1048,22 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
                 continue
             elif "Glint:" in raw_content and "Action:" in raw_content:
                 # Inline fabrication — model wrote Action then immediately invented the Glint
-                # in the same token stream without waiting for system execution.
-                # Strip everything from the first Glint: onward, keep only the real Action.
+                # without waiting for system execution. Strip the fabricated Glint, execute real Action.
                 slog.warning("   [System] Inline hallucination detected (Action + fabricated Glint in same turn) — stripping fabricated Glint.")
-                response_text = raw_content.split("Glint:")[0].strip()
-                inline_hallucination = True
-            else:
-                response_text = raw_content.strip()
-
-            last_response_text = response_text
-            slog.info(f"Clara (Task turn {turn_count}):\n{response_text}")
-            llm.append(assistant(response_text))
-
-            if inline_hallucination:
+                response_text = pre_glint
+                last_response_text = response_text
+                slog.info(f"Clara (Task turn {turn_count}):\n{response_text}")
+                llm.append(assistant(response_text))
                 llm.append(user(
                     "System: You generated a Glint before the system executed your Action. "
                     "Glints are ONLY produced by the system after real tool execution — never by you. "
                     "The fabricated Glint was discarded. Your Action is being executed now — wait for the real Glint."
                 ))
+            else:
+                response_text = raw_content.strip()
+                last_response_text = response_text
+                slog.info(f"Clara (Task turn {turn_count}):\n{response_text}")
+                llm.append(assistant(response_text))
 
             if "Final Answer:" in response_text:
                 final = response_text.split("Final Answer:")[-1].strip()

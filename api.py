@@ -26,6 +26,7 @@ from core_logic.session_logger import init_session_log, slog
 from core_logic.bench_logger import init_bench_log, close_bench_log
 from core_logic.tool_registry import ToolRegistry
 from core_logic.mcp_client import MCPClient, MCPError
+from starlette.websockets import WebSocketState
 
 # Start session log before anything else
 init_session_log()
@@ -175,7 +176,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def send_update(content: str, type="thought",
                           turn_id=None, message_id=None, extra=None):
-        from starlette.websockets import WebSocketState
         if websocket.client_state != WebSocketState.CONNECTED:
             return
         try:

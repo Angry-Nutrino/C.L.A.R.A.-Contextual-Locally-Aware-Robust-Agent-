@@ -247,6 +247,8 @@ Each incoming message gets a `message_id`. The handler fires `asyncio.create_tas
 
 `active_connections: set` tracks live WebSocket connections for broadcasting.
 
+**send_update guard:** `send_update()` checks `websocket.client_state != WebSocketState.CONNECTED` before attempting any send. If the client has disconnected mid-stream, the function returns immediately. Without this guard, a disconnect during a long DELIBERATE response causes repeated "Cannot call send once a close message has been sent" errors on every subsequent streaming token. `WebSocketState` is imported at module top-level (`from starlette.websockets import WebSocketState`) — not inside the hot-path function. Disconnect events are logged at `DEBUG` level, not `ERROR`.
+
 ---
 
 ## Autonomous System
@@ -414,7 +416,7 @@ Full rewrite of `interface/src/Layout.jsx`, `index.css`, `hooks/useClara.js`.
 
 **DC description cleaning (Brief 24):** MCP tool descriptions are cleaned at registration time in `register_server_tools()`. Boilerplate (`\nIMPORTANT:`, `\nThis command can be referenced`, etc.) is stripped so each DC tool's embedding reflects its actual function rather than shared boilerplate. Raw descriptions from the MCP handshake are not retained. `format_tool_schemas_for_context()` truncates to 150 chars in the injected context to keep token cost low.
 
-**TOOL_ARG_DEFAULTS (Brief 24):** `_build_args_from_query()` in `tool_executor.py` applies default values for known multi-required-arg DC tools after mapping the primary arg: `start_process → timeout_ms: 10000`, `read_process_output → timeout_ms: 5000`, `interact_with_process → timeout_ms: 8000`. Only fills args not already present — never overwrites explicit values.
+**TOOL_ARG_DEFAULTS (Brief 24):** `_build_args_from_query()` in `tool_executor.py` applies default values for known multi-required-arg DC tools after mapping the primary arg: `start_process → timeout_ms: 10000`, `read_process_output → timeout_ms: 5000`, `interact_with_process → timeout_ms: 8000`, `list_directory → depth: 0`. Only fills args not already present — never overwrites explicit values. `list_directory` default is 0 (immediate contents only) — prevents silent chunk-limit overflow when the model omits the depth arg on dense directories.
 
 **tool_search architectural note (Brief 23):** `tool_search` is NOT in the tool registry and is NOT embedded or returned by `registry.search()`. It is injected directly into the DELIBERATE \[SYSTEM MODE: TASK\] prompt. This prevents it from appearing in \[DISCOVERED_TOOLS\] and being mistakenly selected by the Interpreter as an action tool for arbitrary queries. `VALID_TOOLS` in `parse_action` is built dynamically from the registry at call time (| {"tool_search"}) so all MCP tools are always valid without manual maintenance. DELIBERATE can always call `tool_search` to discover filesystem/process/MCP capabilities by semantic query.
 
@@ -433,17 +435,26 @@ Full rewrite of `interface/src/Layout.jsx`, `index.css`, `hooks/useClara.js`.
 
 ### ReAct Loop Format Enforcement
 
-Rules 11-15 in SYSTEM_PROMPT:
+Rules 11-16 in SYSTEM_PROMPT:
 
-- Rule 11: After an Observation that answers the question, next output MUST be Thought → Final Answer. No prose dumps, no markdown headers before Final Answer.
+- Rule 11: After a Glint that answers the question, next output MUST be Thought → Final Answer. No prose dumps, no markdown headers before Final Answer.
 - Rule 12: Never simulate or fabricate metrics/statistics/telemetry. python_repl must not be used to generate random numbers presented as real data.
-- Rule 13: FILESYSTEM RESOLUTION — before read_file/write_file on any path not explicitly provided by Alkama in the current turn, call list_directory on the parent first to confirm exact spelling and casing.
+- Rule 13: FILESYSTEM RESOLUTION — when given a filename, use `start_search` first (confirms existence + returns exact path in one call, no chunk-limit risk). Only fall back to `list_directory` (no depth) if search returns nothing. Never use `list_directory` as the first move for a named file. `list_directory` depth: omit or use 0 by default — immediate contents only. Only use depth > 0 when subdirectory structure is explicitly needed AND the directory is known to be sparse. Dense directories (`__pycache__`, model weights, indexes) overflow at depth > 0.
 - Rule 14: ACTION FORMAT IS MANDATORY — every Action must be a valid JSON array. No markdown, no prose, no code fences. A malformatted Action cannot be parsed and wastes the turn.
 - Rule 15: TOOL DISCOVERY — for filesystem, process, or MCP-backed operations not in the core tools list, call tool_search first with a semantic query. Use returned schemas exactly. One retry with refined query allowed; do not repeat the same query.
+- Rule 16: COMPLETION CHECK — before writing Final Answer, Thought must confirm every sub-task is complete or genuinely impossible. Partial results do not constitute a complete answer.
+
+**Chunk-limit error class (Rule 4):** When a tool returns "chunk exceed the limit" or "Separator is not found", the response is too large for the stdio transport. Recovery: retry the SAME tool on the SAME path with reduced scope — omit depth, use a narrower subpath, or read a specific file by name instead of listing a directory. Do NOT change the path or assume the error means the file/directory doesn't exist.
 
 Safety net in run_task: if a turn contains no Thought/Action/Final Answer markers but has content, it is treated as an implicit Final Answer and returned immediately. Prevents the loop from burning remaining turns on idle noise after an off-format response.
 
-Hallucination detection: if the model emits an `Observation:` line without a preceding Action, the loop detects it, strips the fabricated content, appends the truncated assistant message, injects a corrective system message ("Observations can ONLY come from actual tool execution"), increments the turn counter, and `continue`s — forcing a real tool call on the next turn. The turn budget still applies, preventing infinite loops on a persistently hallucinating model.
+**Hallucination detection (two forms):**
+
+1. **Bare Glint** — model emits a `Glint:` line without a preceding Action. Loop detects it, strips fabricated content, appends truncated assistant message, injects corrective system message ("Glints can ONLY come from actual tool execution"), increments turn counter, and `continue`s — forcing a real tool call on the next turn.
+
+2. **Inline fabrication** — model writes `Action: [...]` then immediately writes a fabricated `Glint:` in the same turn (before the system executes anything). Loop splits on `"Glint:"`, keeps only the `pre_glint` portion (the real Action), appends it as the assistant turn, injects a corrective message, and `continue`s — the system then executes the Action normally on the next turn.
+
+`pre_glint` is computed once before the if/elif/else branch to avoid duplication. Turn budget applies to both cases. The custom `Glint:` token (replacing "Observation") reduces hallucination pressure from training bigrams on the word "Observation".
 
 ### Vision Tool Improvements
 
@@ -480,6 +491,12 @@ Add entries manually to `memory.json` when new paths need to be known. Format:
 Full raw JSON output now logged: `>> [Interpreter] Raw output:\n{full_json}`
 Parsed summary: `>> [Interpreter] Parsed → tool=X | confidence=X | uncertainty=X | requires_planning=X | intent=X`
 Use these to diagnose routing decisions.
+
+### Interpreter write_file Routing
+`write_file` where content must be **generated** (code, structured text, analysis, class drafts) → `requires_planning=true`, even if the path is clear. Generating content is always multi-step: compose first, then write.
+`write_file` where content IS the query (e.g. "write 'hello world' to file.txt") → `requires_planning=false`.
+
+Without this distinction the Interpreter routes content-generation tasks to CHAT, which has no tool call capability — the file is never written.
 
 ### Interpreter Personal Memory Routing (Brief 25)
 Questions about people Alkama has mentioned, past conversations, or anything phrased as "do you remember X" / "did I tell you about X" → `tool=null, requires_planning=false`. The answer lives in `[MEMORY_CONTEXT_BLOCK]` already injected. `consult_archive` is explicitly excluded from personal memory lookups — it searches FAISS-indexed documentation (CLAUDE.md, ROADMAP.md, resume), not conversation history.
