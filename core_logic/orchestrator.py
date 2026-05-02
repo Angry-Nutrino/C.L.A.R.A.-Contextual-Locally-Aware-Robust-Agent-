@@ -87,7 +87,10 @@ class Orchestrator:
             self._tracer.close()
         slog.info("[Orchestrator] Stopped. TaskGraph closed.")
 
-    async def submit_user_event(self, text: str, image_data=None, on_step_update=None) -> str:
+    async def submit_user_event(
+        self, text: str, image_data=None,
+        on_step_update=None, on_interpreted=None,
+    ) -> str:
         """
         Entry point for the WebSocket handler. Creates a response future,
         emits a user_input event, and awaits the future resolved by the worker.
@@ -101,6 +104,7 @@ class Orchestrator:
                 "text": text,
                 "image_data": image_data,
                 "on_step_update": on_step_update,
+                "on_interpreted": on_interpreted,
                 "response_future": future,
             },
             priority=1.0,
@@ -211,6 +215,7 @@ class Orchestrator:
         text = payload.get("text", "")
         image_data = payload.get("image_data")
         on_step_update = payload.get("on_step_update")
+        on_interpreted = payload.get("on_interpreted")
         future = payload.get("response_future")
 
         # Add task with only serializable context (image_data is base64 str — safe)
@@ -226,6 +231,7 @@ class Orchestrator:
         # Inject non-serializable runtime objects directly into in-memory context.
         # These are never persisted to SQLite — futures and callbacks are transient.
         task.context["on_step_update"] = on_step_update
+        task.context["on_interpreted"] = on_interpreted
         task.context["response_future"] = future
         await self._broadcast_task("pending", task)
 
