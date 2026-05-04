@@ -117,8 +117,7 @@ CHAT streams directly via `_run_chat()` — no ReAct loop, no tool calls.
 | Tracer | `core_logic/tracer.py` | JSONL observability (orchestrator_tick events) |
 | Session logger | `core_logic/session_logger.py` | Per-session timestamped logs in logs/ |
 | Bench logger | `core_logic/bench_logger.py` | Per-request latency log in benchmarks/ |
-| STT | `core_logic/ears.py` | Thin wrapper — VoiceCoordinator not yet active |
-| TTS | `core_logic/kokoro_mouth.py` | Thin wrapper — VoiceCoordinator not yet active |
+| Voice | `core_logic/voice.py` | VoiceCoordinator — Whisper STT, Kokoro TTS, PTT, acknowledgments (active) |
 
 ---
 
@@ -335,6 +334,47 @@ Moondream2 (`core_logic/sight.py`) is replaced by Grok Vision API (`analyze_imag
 
 ---
 
+## Voice System (Brief 15)
+
+`core_logic/voice.py` — `VoiceCoordinator` singleton, loaded at startup via `api.py` lifespan.
+
+### Audio Architecture
+Two persistent streams opened once at `load()` and closed at `unload()`:
+- `self._in_stream` — `sd.InputStream` (mic, 16kHz, callback-based, always open)
+- `self._out_stream` — `sd.OutputStream` (speaker, 24kHz, persistent)
+
+**Critical:** No `sd.play()` / `sd.wait()` / `sd.stop()` global calls anywhere. Those disrupt the
+mic InputStream on Windows WASAPI via device resets. All playback uses `self._out_stream.write(chunk)`
+in 0.2s chunks with `_stop_flag` checked between each. Interruption uses `stream.abort()` + `stream.start()`.
+
+### STT
+Faster-Whisper `medium.en` on CUDA. Push-to-talk: `start_recording()` on F4 down, `stop_recording_async()` on F4 up. Audio buffered in `_audio_buf` via callback, written to temp WAV, transcribed, temp file deleted. Returns None on silence.
+
+### TTS
+Kokoro ONNX v0.19. `kokoro-onnx` has a broken GPU detection bug (`find_spec("onnxruntime-gpu")` always returns None — hyphens are invalid in Python module names). Fixed at startup by replacing `self._kokoro.sess` with a `CUDAExecutionProvider` InferenceSession directly. First-call ONNX JIT absorbed by a warmup synthesis at startup. Result: ~200ms first-audio latency.
+
+Pipelined playback: synthesizer thread fills `audio_q` (maxsize=3), playback loop writes chunks to `_out_stream`. First audio starts after first-sentence synthesis only (~200ms on CUDA). Long responses stream sentence-by-sentence.
+
+First sentence is sub-split at clause boundary (comma/semicolon/em-dash after 30 chars) so the first synthesis chunk is short and audio starts faster.
+
+### Push-to-Talk (Frontend)
+F4 held = record, F4 released = transcribe. If Clara is speaking when F4 pressed = interrupt.
+PTT `useEffect` in `useClara.js` has `[]` deps (single mount). Handlers read `voiceActiveRef` and
+`claraIsSpeakingRef` (not state) — avoids listener teardown/re-add race that dropped `voice_stop` messages.
+
+### Acknowledgments
+Fired via `on_interpreted` callback immediately after routing, before execution:
+- FAST + tool: "On it." (non-blocking)
+- DELIBERATE (confidence ≥ 0.75): "Give me a moment."
+- DELIBERATE (low confidence): "This will take a moment."
+- CHAT or FAST without tool: no ack
+
+### WS Message Types (voice-related)
+Frontend → Backend: `voice_start`, `voice_stop` (with `message_id`), `voice_interrupt`
+Backend → Frontend: `user_transcript` (STT result), `speaking_start`, `speaking_stop`
+
+---
+
 ## WebSocket Message Protocol
 
 Backend sends:
@@ -343,7 +383,8 @@ Backend sends:
 - `"stream"` — response tokens
 - `"status"` — system status updates
 - `"final_answer"` — complete response with `message_id`
-- `"speaking_start"` / `"speaking_stop"` — voice waveform animation (voice phase, not yet active)
+- `"speaking_start"` / `"speaking_stop"` — voice waveform animation (fires when Kokoro TTS is playing)
+- `"user_transcript"` — STT result from Whisper, displayed as User bubble in chat
 
 ---
 
@@ -568,8 +609,8 @@ auto-rebuild if the file lands in a watched path).
 ### Files That Are Dead / Legacy
 - `core_logic/sight.py` — Moondream2, replaced by Grok Vision, no longer imported
 - `core_logic/tool_descriptions.json` — was MiniLM embedding source, Interpreter replaced this role
-- `core_logic/ears.py` — thin wrapper only, VoiceCoordinator not yet implemented
-- `core_logic/kokoro_mouth.py` — thin wrapper only, VoiceCoordinator not yet implemented
+- `core_logic/ears.py` — superseded by `core_logic/voice.py`, no longer imported
+- `core_logic/kokoro_mouth.py` — superseded by `core_logic/voice.py`, no longer imported
 - Architecture PNG (`Clara_Architecture_Fixed_And_Updated.png`) — outdated, does not reflect current system
 
 ### Branch

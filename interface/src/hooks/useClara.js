@@ -14,6 +14,10 @@ export default function useClara() {
   const [selectedImage, setSelectedImage] = useState(null);
   const [streamingContent, setStreamingContent] = useState("");
   const [lastTokenUsage, setLastTokenUsage] = useState(null);
+  const [voiceActive, setVoiceActive] = useState(false);
+  const [claraIsSpeaking, setClaraIsSpeaking] = useState(false);
+  const voiceActiveRef = useRef(false);
+  const claraIsSpeakingRef = useRef(false);
 
   const socketRef = useRef(null);
   const retryCountRef = useRef(0);
@@ -117,6 +121,22 @@ export default function useClara() {
         setLastTokenUsage(data.extra);
       }
 
+      if (data.type === "user_transcript") {
+        addMessage("User", data.content, null, data.message_id);
+        pendingRef.current.set(data.message_id, true);
+        setStatus("thinking");
+      }
+
+      if (data.type === "speaking_start") {
+        claraIsSpeakingRef.current = true;
+        setClaraIsSpeaking(true);
+      }
+
+      if (data.type === "speaking_stop") {
+        claraIsSpeakingRef.current = false;
+        setClaraIsSpeaking(false);
+      }
+
       if (data.type === "final_answer") {
         const msgId = data.message_id || null;
         addMessage("Clara", data.content, null, msgId);
@@ -159,6 +179,35 @@ export default function useClara() {
     };
   }, [connect]);
 
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.code !== "F4") return;
+      e.preventDefault();
+      if (claraIsSpeakingRef.current) {
+        socketRef.current?.send(JSON.stringify({ type: "voice_interrupt" }));
+        return;
+      }
+      if (!voiceActiveRef.current) {
+        voiceActiveRef.current = true;
+        setVoiceActive(true);
+        socketRef.current?.send(JSON.stringify({ type: "voice_start" }));
+      }
+    };
+    const handleKeyUp = (e) => {
+      if (e.code !== "F4" || !voiceActiveRef.current) return;
+      voiceActiveRef.current = false;
+      setVoiceActive(false);
+      const messageId = crypto.randomUUID();
+      socketRef.current?.send(JSON.stringify({ type: "voice_stop", message_id: messageId }));
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
+  }, []);
+
   const sendMessage = () => {
     if (!input.trim() && !selectedImage) return;
 
@@ -192,6 +241,7 @@ export default function useClara() {
   return {
     messages, thoughts, tasks, input, setInput, sendMessage, status,
     selectedImage, setSelectedImage, handleImageUpload,
-    streamingContent, clearHistory, lastTokenUsage
+    streamingContent, clearHistory, lastTokenUsage,
+    voiceActive, claraIsSpeaking,
   };
 }

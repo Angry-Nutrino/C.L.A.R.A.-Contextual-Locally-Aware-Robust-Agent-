@@ -126,3 +126,48 @@ body {
 .token-divider {
   color: rgba(255,255,255,0.2);
 }
+
+/* ── Voice UI ── */
+.voice-waveform {
+  position: absolute;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  opacity: 0.6;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.voice-bar {
+  width: 3px;
+  height: 20px;
+  background: #10b981;
+  border-radius: 2px;
+  animation: waveform 0.8s ease-in-out infinite alternate;
+}
+
+.voice-bar:nth-child(2) { animation-delay: 0.1s; }
+.voice-bar:nth-child(3) { animation-delay: 0.2s; height: 30px; }
+.voice-bar:nth-child(4) { animation-delay: 0.1s; }
+.voice-bar:nth-child(5) { animation-delay: 0.0s; }
+
+@keyframes waveform {
+  0%   { height: 6px; }
+  100% { height: 24px; }
+}
+
+.voice-recording-indicator {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #ef4444;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  pointer-events: none;
+  z-index: 20;
+}

@@ -9,6 +9,7 @@ import uvicorn
 import psutil
 import platform
 import asyncio
+import threading
 import uuid as _uuid
 
 # --- PATH SETUP ---
@@ -45,19 +46,10 @@ mcp_client: MCPClient | None = None
 voice: VoiceCoordinator | None = None
 active_connections: set = set()  # live WebSocket connections — used for speaking_start/stop broadcast
 
-async def broadcast_task_event(task_id: str, goal: str, state: str, priority: float = 0.5, source: str = "system"):
-    """Broadcast task state changes to all connected clients for the task board."""
-    global active_connections
+async def _broadcast(payload: dict) -> None:
+    """Send a JSON payload to all connected WS clients, pruning dead connections."""
     if not active_connections:
         return
-    payload = {
-        "type": "task_event",
-        "task_id": task_id,
-        "goal": goal,
-        "state": state,
-        "priority": priority,
-        "source": source,
-    }
     dead = set()
     for ws in active_connections:
         try:
@@ -65,20 +57,22 @@ async def broadcast_task_event(task_id: str, goal: str, state: str, priority: fl
         except Exception:
             dead.add(ws)
     if dead:
-        active_connections -= dead
+        active_connections.difference_update(dead)
+
+
+async def broadcast_task_event(task_id: str, goal: str, state: str, priority: float = 0.5, source: str = "system"):
+    await _broadcast({
+        "type": "task_event",
+        "task_id": task_id,
+        "goal": goal,
+        "state": state,
+        "priority": priority,
+        "source": source,
+    })
 
 
 async def _broadcast_speaking(is_speaking: bool):
-    """Send speaking_start/speaking_stop to all connected WS clients."""
-    msg_type = "speaking_start" if is_speaking else "speaking_stop"
-    dead = set()
-    for ws in active_connections:
-        try:
-            await ws.send_json({"type": msg_type})
-        except Exception:
-            dead.add(ws)
-    if dead:
-        active_connections.difference_update(dead)
+    await _broadcast({"type": "speaking_start" if is_speaking else "speaking_stop"})
 
 
 @asynccontextmanager
@@ -225,13 +219,16 @@ async def websocket_endpoint(websocket: WebSocket):
         except Exception as e:
             slog.debug(f"send_update skipped — connection closed: {e}")
 
+    def _voice_ready() -> bool:
+        return bool(voice and voice.is_enabled())
+
     def _speak_ack(interpreted: dict, mode: str):
-        if voice and voice.is_enabled():
+        if _voice_ready():
             ack = voice.get_acknowledgment(interpreted, mode)
             if ack:
                 voice.speak(ack, block=False)
 
-    async def handle_message(user_text: str, image_data, message_id: str):
+    async def handle_message(user_text: str, image_data, message_id: str, via_voice: bool = False):
         try:
             async def on_step(content, type="thought", turn_id=None, extra=None):
                 await send_update(
@@ -242,11 +239,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 text=user_text,
                 image_data=image_data,
                 on_step_update=on_step,
-                on_interpreted=_speak_ack,
+                on_interpreted=_speak_ack if via_voice else None,
             )
             env_watcher.notify_interaction()
-            if voice and voice.is_enabled():
-                voice.speak(response, block=False)
+            if via_voice and _voice_ready():
+                slog.info(f"[Voice] Speaking response ({len(response)} chars), speaking={voice.is_speaking()}")
+                # Start synthesis in background thread before sending WS — hides synthesis latency
+                threading.Thread(target=voice.speak, args=(response,), kwargs={"block": True}, daemon=True).start()
             await websocket.send_json({
                 "type": "final_answer",
                 "content": response,
@@ -272,16 +271,21 @@ async def websocket_endpoint(websocket: WebSocket):
                 message_id = payload.get("message_id", str(_uuid.uuid4()))
 
                 if msg_type == "voice_start":
-                    if voice and voice.is_enabled():
+                    if _voice_ready():
                         voice.start_recording()
                     continue
 
                 if msg_type == "voice_stop":
-                    if voice and voice.is_enabled():
+                    if _voice_ready():
                         text = await voice.stop_recording_async()
                         if text:
+                            await websocket.send_json({
+                                "type": "user_transcript",
+                                "content": text,
+                                "message_id": message_id,
+                            })
                             asyncio.create_task(
-                                handle_message(text, None, message_id)
+                                handle_message(text, None, message_id, via_voice=True)
                             )
                     continue
 

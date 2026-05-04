@@ -201,7 +201,8 @@ export default function Layout() {
   const {
     messages, thoughts, tasks, input, setInput,
     sendMessage, status, selectedImage, setSelectedImage,
-    handleImageUpload, streamingContent, clearHistory, lastTokenUsage
+    handleImageUpload, streamingContent, clearHistory, lastTokenUsage,
+    voiceActive, claraIsSpeaking,
   } = useClara();
 
   const chatEndRef   = useRef(null);
@@ -447,6 +448,20 @@ export default function Layout() {
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0 select-none">
           <h1 className="text-[11rem] font-black text-white/[0.018] tracking-[0.4em] font-mono">CLARA</h1>
         </div>
+
+        {/* Voice waveform — appears when CLARA is speaking */}
+        {claraIsSpeaking && (
+          <div className="voice-waveform">
+            {[...Array(5)].map((_, i) => (
+              <div key={i} className="voice-bar" style={{ animationDelay: `${i * 0.1}s` }} />
+            ))}
+          </div>
+        )}
+
+        {/* Push-to-talk recording indicator */}
+        {voiceActive && (
+          <div className="voice-recording-indicator">● Recording… (release F4)</div>
+        )}
 
         {/* messages */}
         <div className="relative z-10 flex-1 overflow-y-auto px-5 py-6 space-y-5 scroll-smooth pb-36 scrollbar-thin">

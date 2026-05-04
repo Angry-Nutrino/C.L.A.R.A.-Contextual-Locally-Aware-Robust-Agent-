@@ -662,6 +662,10 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
             mode = route(interpreted)
             slog.info(f">> [Router] Mode: {mode}")
 
+            on_interpreted = task_context.get("on_interpreted") if task_context else None
+            if on_interpreted:
+                on_interpreted(interpreted, mode)
+
             # 4. Create a fresh LLM instance per request — isolates concurrent tasks
             #    Model selection by mode:
             #    CHAT:      non-reasoning — ~0.5s TTFT vs 3-8s for reasoning; no planning needed

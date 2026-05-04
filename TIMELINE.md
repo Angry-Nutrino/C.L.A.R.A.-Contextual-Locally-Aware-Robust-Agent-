@@ -1,5 +1,52 @@
 # CLARA Project Timeline
 
+## 2026-05-03
+
+[FIX] Voice recording breaks after 4-5 prompts — persistent OutputStream replaces sd.play/wait/stop
+Root cause: `sd.play()` + `sd.wait()` are global sounddevice calls. On Windows WASAPI, when
+`sd.wait()` hung indefinitely (output stream held open after audio finished), the eventual
+device state reset disrupted the mic `InputStream` callback, leaving `_audio_buf` empty on
+subsequent recordings. `stop_recording()` returned None with no STT despite "Recording started"
+being logged.
+Fix: replaced `sd.play/wait/stop` entirely with a persistent `sd.OutputStream` (self._out_stream)
+opened once at `load()` alongside the mic stream. Audio is written in 0.2s chunks via
+`stream.write()` with `_stop_flag` checked between chunks. Interruption uses `stream.abort()`
+scoped to the output stream only — mic InputStream is now completely isolated from TTS activity.
+Also eliminated the `_waiter` daemon thread and all `sd.wait()` / deadline workarounds.
+
+[FIX] TTS latency 5-6 seconds → ~200ms — Kokoro CUDA upgrade
+Root cause: `kokoro-onnx` GPU detection is broken. It checks `importlib.util.find_spec("onnxruntime-gpu")`
+which always returns None because hyphens are invalid in Python module names. Kokoro always ran
+on CPU despite CUDA being available, causing ~3-5s synthesis per sentence.
+Fix: after `Kokoro(onnx_path, voices_path)` initializes, replace `self._kokoro.sess` with a new
+`ort.InferenceSession` built with `CUDAExecutionProvider`. Added ONNX warmup call at startup to
+absorb JIT compilation cost (~2s once), so first real query synthesizes in ~200ms. Also added
+sub-sentence splitting at clause boundaries (comma/semicolon/em-dash after 30 chars) so the first
+TTS chunk is shorter and starts even faster.
+
+[FIX] PTT keyup missed — voice_stop not sent after several queries
+Root cause: F4 PTT effect in useClara.js had `[voiceActive, claraIsSpeaking]` as dependencies.
+On keydown, `setVoiceActive(true)` triggered a React re-render which tore down and re-added event
+listeners. If F4 was released during the brief listener-swap window, keyup fired with no handler
+and `voice_stop` was never sent to the server — recording started but transcription never ran.
+Fix: moved voiceActive and claraIsSpeaking to refs (voiceActiveRef, claraIsSpeakingRef) alongside
+their state counterparts. PTT useEffect uses `[]` deps (single mount), handlers read from refs
+which are always current. No listener teardown/re-add during the session.
+
+## 2026-05-02
+
+[FEATURE] Voice Phase 1 — Push-to-talk STT + TTS (Brief 15)
+Implemented full voice I/O pipeline for CLARA:
+- New `core_logic/voice.py` — VoiceCoordinator owning Faster-Whisper (medium.en, CUDA) and Kokoro ONNX TTS lifecycle. Push-to-talk STT with asyncio.to_thread transcription. Thread-safe speak() via _speak_lock. Event.wait-based playback instead of polling. Unbounded buffer guard (60s auto-stop). Module-level singleton (get_voice/set_voice).
+- `api.py` — VoiceCoordinator wired into lifespan startup/shutdown (non-fatal on load failure). New `_broadcast()` helper consolidates dead-connection pruning for all WS broadcasts. `broadcast_task_event` and `_broadcast_speaking` both use it. WS receive loop handles voice_start/voice_stop/voice_interrupt message types. TTS response gated on `via_voice=True` — text-input responses never trigger TTS.
+- `core_logic/orchestrator.py` — `on_interpreted` callback added to `submit_user_event` signature and injected into task context in `_handle_user_input`.
+- `core_logic/agent.py` — `on_interpreted(interpreted, mode)` called immediately after routing decision in `process_request`.
+- `interface/src/hooks/useClara.js` — `voiceActive` and `claraIsSpeaking` state. F4 push-to-talk key handler (keydown/keyup). speaking_start/speaking_stop WS message handlers.
+- `interface/src/Layout.jsx` + `index.css` — Emerald waveform animation when CLARA speaks. Red recording indicator when F4 held.
+- Restored `core_logic/agent.py` from git history after accidental deletion in d8fe364 (Cleanups commit).
+
+---
+
 **Purpose:** Track all features, updates, fixes, refactors, and enhancements chronologically. For tracing what changed, when, and why — not for motivation.
 
 **Markers:**
