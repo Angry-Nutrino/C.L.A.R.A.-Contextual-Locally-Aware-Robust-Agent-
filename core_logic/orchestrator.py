@@ -26,7 +26,6 @@ class Orchestrator:
         self._running: bool = False
         self._loop_task: asyncio.Task | None = None
         self._active_workers: dict = {}  # task_id → asyncio.Task
-        self._interrupt: bool = False
         self._conflict_detector  = ConflictDetector()
         self._arbitration_engine = ArbitrationEngine()
         self._tracer = tracer
@@ -47,6 +46,7 @@ class Orchestrator:
                     state=state,
                     priority=task.priority,
                     source=task.origin,
+                    message_id=task.context.get("message_id", ""),
                 )
         except Exception as e:
             slog.warning(f"   [Broadcast] task_event failed: {e}")
@@ -87,9 +87,59 @@ class Orchestrator:
             self._tracer.close()
         slog.info("[Orchestrator] Stopped. TaskGraph closed.")
 
+    async def cancel_task(self, task_id: str) -> bool:
+        """
+        Cancel a running or pending user task by task_id.
+        Returns True if cancelled, False if not found or already terminal.
+        Resolves the response_future with a cancellation message so the
+        WebSocket handler gets a response and the client isn't left hanging.
+        """
+        task = self._task_graph.get_task(task_id)
+        if task is None:
+            slog.warning(f"[Orchestrator] cancel_task: task {task_id[:8]} not found.")
+            return False
+
+        if task.state in ("completed", "failed", "invalidated", "cancelled"):
+            slog.debug(f"[Orchestrator] cancel_task: task {task_id[:8]} already terminal ({task.state}).")
+            return False
+
+        slog.info(f"[Orchestrator] Cancelling task {task_id[:8]}: {task.goal[:60]}")
+
+        # Cancel the asyncio worker if running
+        worker = self._active_workers.pop(task_id, None)
+        if worker and not worker.done():
+            worker.cancel()
+            try:
+                await worker
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        # Resolve the future so the WS handler doesn't hang
+        future = task.context.get("response_future")
+        if future and not future.done():
+            future.set_result("Cancelled.")
+
+        # Transition to invalidated (reuses existing terminal state)
+        try:
+            self._task_graph.update_state(task_id, "invalidated")
+        except Exception as e:
+            slog.error(f"[Orchestrator] cancel_task state update failed: {e}")
+
+        await self._broadcast_task("failed", task)  # 'failed' renders red in task board
+
+        try:
+            self._agent.log_system_episode(
+                f"[TASK CANCELLED] '{task.goal[:60]}' cancelled by user."
+            )
+        except Exception:
+            pass
+
+        return True
+
     async def submit_user_event(
         self, text: str, image_data=None,
         on_step_update=None, on_interpreted=None,
+        message_id: str = None,
     ) -> str:
         """
         Entry point for the WebSocket handler. Creates a response future,
@@ -103,6 +153,7 @@ class Orchestrator:
             payload={
                 "text": text,
                 "image_data": image_data,
+                "message_id": message_id,
                 "on_step_update": on_step_update,
                 "on_interpreted": on_interpreted,
                 "response_future": future,
@@ -214,6 +265,7 @@ class Orchestrator:
         payload = event.payload
         text = payload.get("text", "")
         image_data = payload.get("image_data")
+        message_id = payload.get("message_id")
         on_step_update = payload.get("on_step_update")
         on_interpreted = payload.get("on_interpreted")
         future = payload.get("response_future")
@@ -224,7 +276,7 @@ class Orchestrator:
             priority=1.0,
             reversibility="reversible",
             dependencies=[],
-            context={"text": text, "image_data": image_data},
+            context={"text": text, "image_data": image_data, "message_id": message_id},
             origin="user",
         )
 
@@ -244,30 +296,10 @@ class Orchestrator:
             reversibility=task.reversibility,
         )
 
-        # If another user task is already running, queue this one behind it.
-        # Background tasks (origin=system) run in parallel and are unaffected.
-        running_user_tasks = [
-            t for t in self._task_graph.get_tasks_by_state("running")
-            if t.origin == "user"
-        ]
-        if running_user_tasks:
-            task.priority = 0.95
-            slog.info(
-                f"[Orchestrator] User task queued behind running task "
-                f"{running_user_tasks[0].id[:8]} — priority set to 0.95"
-            )
-
-        # Signal interrupt — pause lower-priority running work before dispatching
-        self._interrupt = True
-        await self._check_and_pause_lower_priority(new_task_priority=1.0)
-        self._interrupt = False
-
         slog.info(f"[Orchestrator] user_input → Task {task.id[:8]} created: {text[:60]}")
 
     async def _dispatch_ready_tasks(self) -> None:
         """Select pending tasks whose dependencies are met and launch workers."""
-        if self._interrupt:
-            return  # Do not dispatch during active interrupt handling
         ready   = self._task_graph.get_ready_tasks()
         running = self._task_graph.get_all_active()
 
@@ -477,6 +509,10 @@ class Orchestrator:
 
             # Cancel the asyncio worker so it actually stops executing
             worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
             self._active_workers.pop(task_id, None)
 
             # Log pause to episodic memory for CLARA's passive awareness
@@ -494,12 +530,6 @@ class Orchestrator:
                 paused_task_goal=tg_task.goal[:80],
                 triggered_by="higher_priority_user_input",
             )
-            worker_task.cancel()
-            try:
-                await worker_task
-            except (asyncio.CancelledError, Exception):
-                pass
-            self._active_workers.pop(task_id, None)
 
     async def _resume_paused_tasks(self) -> None:
         """

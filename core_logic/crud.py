@@ -21,8 +21,14 @@ class crud:
         return {
             "user_profile": {},
             "project_state": {},
-            "long_term": [],     # <--- NEW: The "Vault"
-            "episodic_log": []   # <--- The "Stream"
+            "long_term": [],
+            "episodic_log": [],
+            "self_knowledge": {
+                "architecture_facts": [],
+                "failure_patterns": [],
+                "recovery_methods": []
+            },
+            "filesystem_map": {}
         }
 
     def _save_memory(self):
@@ -136,6 +142,28 @@ class crud:
             for label, path in known_locations.items():
                 context += f"- {label}: {path}\n"
 
+        # Self knowledge — CLARA's operational learnings about her own architecture
+        sk = self.memory.get('self_knowledge', {})
+        sk_lines = []
+        for fact in sk.get('architecture_facts', []):
+            if fact.get('status') == 'active':
+                sk_lines.append(f"  [ARCH] {fact['summary']} — {fact['detail']} [conf:{fact['confidence']}]")
+        for pat in sk.get('failure_patterns', []):
+            if pat.get('status') == 'active':
+                sk_lines.append(f"  [FAIL] Trigger: {pat['trigger']} | Fix: {pat['correct_approach']}")
+        for rec in sk.get('recovery_methods', []):
+            if rec.get('status') == 'active':
+                sk_lines.append(f"  [RECV] {rec['problem']} → {rec['method']}")
+        if sk_lines:
+            context += "\n[SELF KNOWLEDGE — CLARA's operational learnings. CLAUDE.md takes precedence on all architectural matters]:\n"
+            context += "\n".join(sk_lines) + "\n"
+
+        # Filesystem map — progressively discovered directory/file tree
+        fsmap = self.memory.get('filesystem_map', {})
+        if fsmap:
+            context += "\n[FILE SYSTEM MAP]:\n"
+            context += self._serialize_filesystem_map(fsmap)
+
         # Vault
         if long_term:
             context += "\n[PERMANENT KNOWLEDGE VAULT]:\n"
@@ -228,3 +256,115 @@ class crud:
         self.memory["long_term"].append(fact)
         self._save_memory()
         print(f"   [Memory] 🔒 Locked to Vault: {fact}")
+
+    def add_self_knowledge(self, category: str, entry: dict) -> bool:
+        """
+        Add a self_knowledge entry with dedup guard.
+        category: 'architecture_facts' | 'failure_patterns' | 'recovery_methods'
+        Returns True if added, False if duplicate.
+        """
+        if 'self_knowledge' not in self.memory:
+            self.memory['self_knowledge'] = {
+                'architecture_facts': [], 'failure_patterns': [], 'recovery_methods': []
+            }
+        cat_list = self.memory['self_knowledge'].setdefault(category, [])
+        dedup_key = {
+            'architecture_facts': 'summary',
+            'failure_patterns': 'trigger',
+            'recovery_methods': 'problem'
+        }.get(category, 'summary')
+        new_val = entry.get(dedup_key, '').lower().strip()
+        for existing in cat_list:
+            if existing.get(dedup_key, '').lower().strip() == new_val:
+                return False
+        cat_list.append(entry)
+        self._save_memory()
+        from .session_logger import slog
+        slog.info(f">> [Self-Knowledge] Added to {category}: {entry.get(dedup_key, '')[:80]}")
+        return True
+
+    def merge_filesystem_path(self, path_str: str, is_file: bool = False) -> None:
+        """
+        Add a confirmed file or directory path into the filesystem_map tree.
+        path_str: absolute Windows path e.g. 'E:\\ML PROJECTS\\AGENT_ZERO\\api.py'
+        is_file: True for a file node (value=None), False for a directory node (value={}).
+        Existing nodes are never overwritten — only new nodes are added.
+        """
+        if 'filesystem_map' not in self.memory:
+            self.memory['filesystem_map'] = {}
+        path_str = path_str.replace('/', '\\').rstrip('\\')
+        parts = [p for p in path_str.split('\\') if p]
+        if not parts:
+            return
+        drive = parts[0].rstrip(':')
+        rest = parts[1:]
+        if not drive or not rest:
+            return
+        node = self.memory['filesystem_map']
+        if drive not in node:
+            node[drive] = {}
+        node = node[drive]
+        for i, part in enumerate(rest):
+            is_last = (i == len(rest) - 1)
+            if is_last:
+                if part not in node:
+                    node[part] = None if is_file else {}
+            else:
+                if part not in node or node[part] is None:
+                    node[part] = {}
+                node = node[part]
+        self._save_memory()
+
+    def remove_filesystem_path(self, path_str: str) -> None:
+        """
+        Remove a stale entry from the filesystem_map when confirmed not found.
+        """
+        path_str = path_str.replace('/', '\\').rstrip('\\')
+        parts = [p for p in path_str.split('\\') if p]
+        if not parts:
+            return
+        drive = parts[0].rstrip(':')
+        rest = parts[1:]
+        fsmap = self.memory.get('filesystem_map', {})
+        node = fsmap.get(drive)
+        if node is None:
+            return
+        for part in rest[:-1]:
+            if not isinstance(node, dict) or part not in node:
+                return
+            node = node[part]
+        if isinstance(node, dict) and rest and rest[-1] in node:
+            del node[rest[-1]]
+            self._save_memory()
+
+    def _serialize_filesystem_map(self, fsmap: dict, indent: int = 0) -> str:
+        """
+        Compact human-readable serialization of the filesystem_map tree for context injection.
+        Directories are shown with trailing backslash; unexplored dirs labeled [unexplored].
+        Files in a directory are grouped inline, up to 8 per line with [+N more] overflow.
+        """
+        MAX_FILES_INLINE = 8
+        lines = []
+        prefix = '  ' * indent
+        for key, val in sorted(fsmap.items()):
+            if val is None:
+                # file — collected by parent, not emitted here individually
+                continue
+            if isinstance(val, dict):
+                # Drive letters (single char at top level) shown with colon
+                display_key = f"{key}:" if (indent == 0 and len(key) == 1) else key
+                files = sorted(k for k, v in val.items() if v is None)
+                subdirs = {k: v for k, v in val.items() if isinstance(v, dict)}
+                if not files and not subdirs:
+                    lines.append(f"{prefix}{display_key}\\  [unexplored]")
+                else:
+                    lines.append(f"{prefix}{display_key}\\")
+                    if files:
+                        shown = files[:MAX_FILES_INLINE]
+                        line = f"{prefix}  " + '  '.join(shown)
+                        if len(files) > MAX_FILES_INLINE:
+                            line += f"  [+{len(files) - MAX_FILES_INLINE} more]"
+                        lines.append(line)
+                    if subdirs:
+                        lines.append(self._serialize_filesystem_map(subdirs, indent + 1).rstrip('\n'))
+        return '\n'.join(lines) + '\n'

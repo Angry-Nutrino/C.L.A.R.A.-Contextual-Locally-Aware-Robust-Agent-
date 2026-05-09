@@ -18,7 +18,91 @@ Never wrap async MCP calls in asyncio.to_thread or asyncio.run.
 
 import asyncio
 import json
+import re
 from .session_logger import slog
+
+# ── Filesystem tools whose paths we track in filesystem_map ──────────────────
+_FS_PATH_TOOLS = frozenset({
+    "read_file", "write_file", "list_directory", "create_directory",
+    "get_more_search_results",
+})
+
+
+def _update_filesystem_map(tool_name: str, args: dict, result: str) -> None:
+    """
+    After a successful filesystem tool call, update the filesystem_map tree.
+    Called from both execute_fast and execute_deliberate — never raises.
+    """
+    if tool_name not in _FS_PATH_TOOLS:
+        return
+    if not isinstance(result, str):
+        return
+    lowered = result.lstrip().lower()
+    if lowered.startswith("error:") or lowered.startswith("tool error:"):
+        return
+    try:
+        from .crud import crud as _crud
+        if tool_name in ("read_file", "write_file"):
+            path = args.get("path", "")
+            if path:
+                _crud.merge_filesystem_path(path, is_file=True)
+
+        elif tool_name == "create_directory":
+            path = args.get("path", "")
+            if path:
+                _crud.merge_filesystem_path(path, is_file=False)
+
+        elif tool_name == "list_directory":
+            path = args.get("path", "")
+            if path:
+                _crud.merge_filesystem_path(path, is_file=False)
+                _parse_list_directory_into_map(path, result, _crud)
+
+        elif tool_name == "get_more_search_results":
+            _parse_search_paths_into_map(result, _crud)
+
+    except Exception:
+        pass  # never disrupt tool execution
+
+
+def _parse_list_directory_into_map(parent_path: str, result: str, crud) -> None:
+    """Parse list_directory output and add children to filesystem_map."""
+    parent = parent_path.rstrip("\\").rstrip("/")
+    # Try JSON array first (DC may return structured JSON)
+    try:
+        data = json.loads(result)
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    name = item.get("name", "")
+                    is_dir = item.get("isDirectory", item.get("type", "") == "directory")
+                    if name:
+                        crud.merge_filesystem_path(f"{parent}\\{name}", is_file=not is_dir)
+            return
+    except (json.JSONDecodeError, Exception):
+        pass
+    # Text fallback — common DC format: lines with filenames/dirnames
+    for line in result.splitlines():
+        line = line.strip()
+        if not line or ":" in line[:3]:  # skip header lines like "Contents of E:\..."
+            continue
+        is_dir = line.endswith("/") or line.endswith("\\") or "(directory)" in line.lower() or "[dir]" in line.lower()
+        name = re.split(r'\s{2,}|\t|\s+\(', line)[0].strip().rstrip("/\\")
+        if name and ("." in name or is_dir):
+            try:
+                crud.merge_filesystem_path(f"{parent}\\{name}", is_file=not is_dir)
+            except Exception:
+                pass
+
+
+def _parse_search_paths_into_map(result: str, crud) -> None:
+    """Extract Windows file paths from search result text and add to filesystem_map."""
+    # Match paths like E:\something\file.py or C:\Users\...
+    for match in re.finditer(r'[A-Za-z]:\\(?:[^\s:\n\r"\'<>|?*]+\\)*[^\s:\n\r"\'<>|?*]+\.[A-Za-z0-9]{1,10}', result):
+        try:
+            crud.merge_filesystem_path(match.group(0), is_file=True)
+        except Exception:
+            pass
 
 
 def _extract_param(query: str, *param_names: str, fallback: str = "") -> tuple:
@@ -106,7 +190,9 @@ async def execute_fast(tool_name: str, args: dict, registry, mcp_client) -> str:
             if server and server != "native" and mcp_client is not None:
                 # Direct await — mcp_client.call is async, never wrap in to_thread
                 result = await mcp_client.call(server, tool_name, args)
-                return result if isinstance(result, str) else str(result)
+                result_str = result if isinstance(result, str) else str(result)
+                _update_filesystem_map(tool_name, args, result_str)
+                return result_str
             elif server is None:
                 return f"Error: Tool '{tool_name}' not found in registry."
             else:
@@ -200,7 +286,9 @@ async def execute_deliberate(
                 mcp_args = _build_args_from_query(tool_name, query, schema)
                 # Direct await — mcp_client.call is async
                 result = await mcp_client.call(server, tool_name, mcp_args)
-                return result if isinstance(result, str) else str(result)
+                result_str = result if isinstance(result, str) else str(result)
+                _update_filesystem_map(tool_name, mcp_args, result_str)
+                return result_str
             elif server is None:
                 return (
                     f"Tool '{tool_name}' not found. "

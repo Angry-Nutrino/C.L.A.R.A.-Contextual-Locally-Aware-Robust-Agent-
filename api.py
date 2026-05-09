@@ -60,7 +60,7 @@ async def _broadcast(payload: dict) -> None:
         active_connections.difference_update(dead)
 
 
-async def broadcast_task_event(task_id: str, goal: str, state: str, priority: float = 0.5, source: str = "system"):
+async def broadcast_task_event(task_id: str, goal: str, state: str, priority: float = 0.5, source: str = "system", message_id: str = ""):
     await _broadcast({
         "type": "task_event",
         "task_id": task_id,
@@ -68,6 +68,7 @@ async def broadcast_task_event(task_id: str, goal: str, state: str, priority: fl
         "state": state,
         "priority": priority,
         "source": source,
+        "message_id": message_id,
     })
 
 
@@ -204,20 +205,17 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def send_update(content: str, type="thought",
                           turn_id=None, message_id=None, extra=None):
-        if websocket.client_state != WebSocketState.CONNECTED:
+        if not active_connections:
             return
-        try:
-            payload = {
-                "type": type,
-                "content": content,
-                "turn_id": turn_id,
-                "message_id": message_id,
-            }
-            if extra:
-                payload["extra"] = extra
-            await websocket.send_json(payload)
-        except Exception as e:
-            slog.debug(f"send_update skipped — connection closed: {e}")
+        payload = {
+            "type": type,
+            "content": content,
+            "turn_id": turn_id,
+            "message_id": message_id,
+        }
+        if extra:
+            payload["extra"] = extra
+        await _broadcast(payload)
 
     def _voice_ready() -> bool:
         return bool(voice and voice.is_enabled())
@@ -238,6 +236,7 @@ async def websocket_endpoint(websocket: WebSocket):
             response = await orchestrator.submit_user_event(
                 text=user_text,
                 image_data=image_data,
+                message_id=message_id,
                 on_step_update=on_step,
                 on_interpreted=_speak_ack if via_voice else None,
             )
@@ -246,21 +245,18 @@ async def websocket_endpoint(websocket: WebSocket):
                 slog.info(f"[Voice] Speaking response ({len(response)} chars), speaking={voice.is_speaking()}")
                 # Start synthesis in background thread before sending WS — hides synthesis latency
                 threading.Thread(target=voice.speak, args=(response,), kwargs={"block": True}, daemon=True).start()
-            await websocket.send_json({
+            await _broadcast({
                 "type": "final_answer",
                 "content": response,
                 "message_id": message_id,
             })
         except Exception as e:
             slog.error(f"[WS] handle_message failed: {e}")
-            try:
-                await websocket.send_json({
-                    "type": "final_answer",
-                    "content": f"Error: {e}",
-                    "message_id": message_id,
-                })
-            except Exception:
-                pass
+            await _broadcast({
+                "type": "final_answer",
+                "content": f"Error: {e}",
+                "message_id": message_id,
+            })
 
     try:
         while True:
@@ -292,6 +288,17 @@ async def websocket_endpoint(websocket: WebSocket):
                 if msg_type == "voice_interrupt":
                     if voice:
                         voice.interrupt_speech()
+                    continue
+
+                if msg_type == "cancel_task":
+                    target_id = payload.get("task_id", "")
+                    if target_id and orchestrator:
+                        cancelled = await orchestrator.cancel_task(target_id)
+                        await websocket.send_json({
+                            "type": "task_cancelled",
+                            "task_id": target_id,
+                            "success": cancelled,
+                        })
                     continue
 
                 user_text  = payload.get("text", "")

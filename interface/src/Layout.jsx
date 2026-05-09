@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import {
   Terminal, Cpu, Send, Paperclip, X, Zap, Activity,
   Shield, User, Copy, Check, ChevronRight, Radio,
@@ -20,8 +22,163 @@ function useCopy(timeout = 1500) {
   return [copied, copy];
 }
 
+// ─── Syntax-highlighted code block with copy button ─────────────────────────
+function CodeBlock({ language, children }) {
+  const [copied, copy] = useCopy(1500);
+  const label = language ? language.toUpperCase() : "CODE";
+  return (
+    <div className="relative group/code my-2">
+      <div className="absolute right-2 top-2 flex items-center gap-2 z-10
+        opacity-0 group-hover/code:opacity-100 transition-opacity duration-150">
+        <span className="text-[9px] font-mono text-white/20 tracking-widest">{label}</span>
+        <button
+          onClick={() => copy(children)}
+          className="text-[9px] font-mono px-2 py-0.5 rounded
+            bg-black/60 border border-white/10
+            text-white/30 hover:text-emerald-400 hover:border-emerald-500/30
+            transition-colors duration-150"
+        >
+          {copied ? "COPIED" : "COPY"}
+        </button>
+      </div>
+      <SyntaxHighlighter
+        language={language || "text"}
+        style={oneDark}
+        PreTag="div"
+        customStyle={{
+          background: "rgba(0,0,0,0.72)",
+          border: "1px solid rgba(16,185,129,0.12)",
+          borderRadius: "10px",
+          fontSize: "12px",
+          margin: 0,
+          padding: "14px 16px",
+          fontFamily: "'JetBrains Mono','Fira Code',monospace",
+        }}
+      >
+        {children}
+      </SyntaxHighlighter>
+    </div>
+  );
+}
+
+// ─── Shared markdown component overrides ─────────────────────────────────────
+const markdownComponents = {
+  // passthrough — CodeBlock renders the outer container
+  pre: ({ children }) => <>{children}</>,
+
+  code({ className, children }) {
+    const match = /language-(\w+)/.exec(className || "");
+    const content = String(children);
+    // block: has language annotation OR multiple lines (unannotated fenced block)
+    if (match || content.includes("\n")) {
+      return (
+        <CodeBlock language={match?.[1]}>
+          {content.replace(/\n$/, "")}
+        </CodeBlock>
+      );
+    }
+    // inline code
+    return (
+      <code className="bg-black/50 text-emerald-300 px-1.5 py-0.5 rounded text-[11px] font-mono">
+        {children}
+      </code>
+    );
+  },
+
+  // wrap tables for horizontal scroll on narrow chat panel
+  table: ({ children }) => (
+    <div className="prose-table-wrap overflow-x-auto my-3 rounded-lg border border-white/6">
+      <table>{children}</table>
+    </div>
+  ),
+};
+
+// ─── Per-query thought card ───────────────────────────────────────────────────
+function QueryCard({ card, onToggle }) {
+  const isActive = !card.isComplete && !card.isCancelled && !card.isFailed;
+
+  const stateLabel = card.isCancelled ? "CANCELLED"
+    : card.isFailed   ? "FAILED"
+    : card.isComplete ? "DONE"
+    : "PROCESSING";
+
+  const dotColor = isActive
+    ? "bg-emerald-400 animate-pulse"
+    : (card.isCancelled || card.isFailed) ? "bg-red-400"
+    : "bg-emerald-500/40";
+
+  const borderColor = isActive
+    ? "border-emerald-500/30 shadow-[0_0_10px_rgba(16,185,129,0.07)]"
+    : (card.isCancelled || card.isFailed) ? "border-red-500/20"
+    : "border-white/5";
+
+  const stateColor = isActive ? "text-emerald-400/60"
+    : (card.isCancelled || card.isFailed) ? "text-red-400/50"
+    : "text-white/20";
+
+  return (
+    <div className={`
+      rounded-xl border mb-2 overflow-hidden transition-all duration-300 bg-black/30
+      ${borderColor} ${!isActive ? "opacity-55 hover:opacity-80 transition-opacity" : ""}
+    `}>
+      {/* header — always visible */}
+      <div
+        className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-white/2 transition-colors select-none"
+        onClick={() => onToggle(card.messageId)}
+      >
+        <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${dotColor}`} />
+        <div className="flex-1 min-w-0">
+          <p className="text-[10px] font-mono text-white/55 truncate leading-snug">
+            {card.query.slice(0, 50)}{card.query.length > 50 ? "…" : ""}
+          </p>
+          <div className="flex items-center gap-2 mt-0.5">
+            <span className="text-[8px] font-mono text-white/20">{card.time}</span>
+            <span className={`text-[8px] font-bold font-mono tracking-widest ${stateColor}`}>
+              {stateLabel}
+            </span>
+            {card.thoughts.length > 0 && (
+              <span className="text-[8px] font-mono text-white/15">
+                {card.thoughts.length} step{card.thoughts.length !== 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+        </div>
+        <ChevronRight
+          size={10}
+          className={`shrink-0 text-white/20 transition-transform duration-200 ${card.isExpanded ? "rotate-90" : ""}`}
+        />
+      </div>
+
+      {/* body — expandable */}
+      {card.isExpanded && (
+        <div className="border-t border-white/5 px-3 pt-2 pb-3 space-y-2 max-h-52 overflow-y-auto scrollbar-thin">
+          {card.thoughts.length === 0 ? (
+            <p className="text-[10px] text-white/20 font-mono italic py-1">
+              {isActive ? "Awaiting thoughts…" : "No thoughts recorded."}
+            </p>
+          ) : (
+            card.thoughts.map((t, i) => {
+              const isLast = i === card.thoughts.length - 1;
+              return (
+                <div key={i} className={`border-l-2 pl-2.5 py-0.5 ${
+                  isLast && isActive ? "border-emerald-500/60" : "border-white/8"
+                }`}>
+                  <span className="block text-[8px] font-mono text-white/20 mb-0.5">{t.time}</span>
+                  <span className={`text-[10px] font-mono leading-relaxed whitespace-pre-wrap ${
+                    isLast && isActive ? "text-emerald-100/70" : "text-gray-500/60"
+                  }`}>{t.text}</span>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Task board card ─────────────────────────────────────────────────────────
-function TaskCard({ task, exiting }) {
+function TaskCard({ task, exiting, onCancel }) {
   const isBackground = task.goal.startsWith("[BACKGROUND]") || task.goal.startsWith("[ENVIRONMENT]");
   const cleanGoal = task.goal
     .replace(/^\[BACKGROUND\]\s*/, "")
@@ -51,7 +208,7 @@ function TaskCard({ task, exiting }) {
       bg-black/30 backdrop-blur-sm transition-all duration-300
     `}>
       {/* priority bar */}
-      <div className="absolute bottom-0 left-0 h-[2px] w-full bg-white/5">
+      <div className="absolute bottom-0 left-0 h-0.5 w-full bg-white/5">
         <div
           className={`h-full ${priorityColor} transition-all duration-700`}
           style={{ width: `${priorityPct}%` }}
@@ -59,7 +216,7 @@ function TaskCard({ task, exiting }) {
       </div>
 
       <div className="flex items-start gap-2">
-        <span className={`mt-1 flex-shrink-0 w-2 h-2 rounded-full ${cfg.dot}`} />
+        <span className={`mt-1 shrink-0 w-2 h-2 rounded-full ${cfg.dot}`} />
         <div className="flex-1 min-w-0">
           <p className="text-[11px] text-gray-200 font-mono leading-snug truncate">{cleanGoal}</p>
           <div className="flex items-center gap-2 mt-1">
@@ -73,6 +230,17 @@ function TaskCard({ task, exiting }) {
             )}
           </div>
         </div>
+        {onCancel && task.source === "user"
+          && (task.state === "running" || task.state === "active" || task.state === "pending") && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onCancel(task.task_id); }}
+            className="shrink-0 mt-0.5 p-0.5 rounded text-white/20
+              hover:text-red-400 hover:bg-red-500/10 transition-colors duration-150"
+            title="Cancel task"
+          >
+            <X size={10} />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -116,8 +284,8 @@ function MessageBubble({ msg, index, messages, onQuote }) {
         <div className={`
           p-4 rounded-2xl flex flex-col gap-2 transition-all duration-150
           ${isClara
-            ? "bg-gradient-to-br from-emerald-950/60 to-black/60 border border-emerald-500/20 text-emerald-50 shadow-[0_0_20px_rgba(16,185,129,0.08)] hover:shadow-[0_0_25px_rgba(16,185,129,0.12)]"
-            : "bg-gradient-to-br from-[#1c1c1c] to-[#141414] border border-white/8 text-gray-200 hover:border-white/12"
+            ? "bg-linear-to-br from-emerald-950/60 to-black/60 border border-emerald-500/20 text-emerald-50 shadow-[0_0_20px_rgba(16,185,129,0.08)] hover:shadow-[0_0_25px_rgba(16,185,129,0.12)]"
+            : "bg-linear-to-br from-[#1c1c1c] to-[#141414] border border-white/8 text-gray-200 hover:border-white/12"
           }
         `}>
           {/* image */}
@@ -132,7 +300,7 @@ function MessageBubble({ msg, index, messages, onQuote }) {
           {/* reply attribution */}
           {replyTarget && (
             <div className="flex items-start gap-2 pb-2 mb-1 border-b border-emerald-500/10">
-              <div className="w-0.5 h-full bg-emerald-500/40 rounded-full flex-shrink-0 self-stretch min-h-3" />
+              <div className="w-0.5 h-full bg-emerald-500/40 rounded-full shrink-0 self-stretch min-h-3" />
               <span className="text-[10px] text-emerald-400/50 font-mono leading-relaxed italic truncate">
                 {replyTarget.text.slice(0, 60)}{replyTarget.text.length > 60 ? "…" : ""}
               </span>
@@ -142,11 +310,12 @@ function MessageBubble({ msg, index, messages, onQuote }) {
           {/* content */}
           {isClara ? (
             <div className="prose prose-invert prose-sm max-w-none leading-relaxed
-              prose-code:bg-black/50 prose-code:text-emerald-300 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-[11px]
-              prose-pre:bg-black/70 prose-pre:border prose-pre:border-emerald-500/10 prose-pre:rounded-xl prose-pre:text-xs
               prose-a:text-emerald-400 prose-strong:text-emerald-100 prose-headings:text-white
-              prose-p:text-emerald-50/90 prose-li:text-emerald-50/80">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+              prose-p:text-emerald-50/90 prose-li:text-emerald-50/80
+              prose-hr:border-white/8 prose-blockquote:not-italic">
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                {msg.text}
+              </ReactMarkdown>
             </div>
           ) : (
             <p className="whitespace-pre-wrap leading-relaxed text-sm">{msg.text}</p>
@@ -178,7 +347,7 @@ function VitalBar({ label, value, icon: Icon, color = "emerald", warn = 85 }) {
           {value}
         </span>
       </div>
-      <div className="h-[3px] bg-white/5 rounded-full overflow-hidden">
+      <div className="h-0.75 bg-white/5 rounded-full overflow-hidden">
         <div
           className={`h-full ${barColor} rounded-full transition-all duration-700 ease-out vital-bar-fill`}
           style={{ width: `${Math.min(pct, 100)}%` }}
@@ -199,8 +368,8 @@ export default function Layout() {
   const [currentMode, setCurrentMode]         = useState(null); // FAST/CHAT/DELIBERATE
 
   const {
-    messages, thoughts, tasks, input, setInput,
-    sendMessage, status, selectedImage, setSelectedImage,
+    messages, queryCards, systemLogs, tasks, input, setInput,
+    sendMessage, cancelTask, toggleCard, status, selectedImage, setSelectedImage,
     handleImageUpload, streamingContent, clearHistory, lastTokenUsage,
     voiceActive, claraIsSpeaking,
   } = useClara();
@@ -229,7 +398,7 @@ export default function Layout() {
   // auto-scroll neural
   useEffect(() => {
     neuralEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [thoughts]);
+  }, [queryCards]);
 
   // auto-expand textarea
   useEffect(() => {
@@ -239,14 +408,15 @@ export default function Layout() {
     }
   }, [input]);
 
-  // detect mode from thoughts
+  // detect mode from the most recent active card's latest thought
   useEffect(() => {
-    const last = thoughts[thoughts.length - 1];
+    const activeCard = queryCards.find(c => !c.isComplete && !c.isCancelled && !c.isFailed);
+    const last = activeCard?.thoughts[activeCard.thoughts.length - 1];
     if (!last) return;
     if (last.text?.includes("FAST")) setCurrentMode("FAST");
     else if (last.text?.includes("DELIBERATE")) setCurrentMode("DELIBERATE");
     else if (last.text?.includes("CHAT")) setCurrentMode("CHAT");
-  }, [thoughts]);
+  }, [queryCards]);
 
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -298,7 +468,7 @@ export default function Layout() {
 
       {/* ── ZONE A: SIDEBAR ──────────────────────────────────────────────── */}
       <aside className={`
-        relative flex flex-col bg-black/50 border-r border-white/5
+        relative flex-col bg-black/50 border-r border-white/5
         backdrop-blur-xl overflow-hidden transition-all duration-300 ease-in-out hidden md:flex
         ${isSidebarOpen ? "w-72" : "w-0 border-none"}
       `}>
@@ -308,7 +478,7 @@ export default function Layout() {
         />
 
         {/* header */}
-        <div className="p-5 border-b border-white/5 flex-shrink-0">
+        <div className="p-5 border-b border-white/5 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="relative">
               <Terminal size={18} className="text-emerald-400" />
@@ -316,7 +486,7 @@ export default function Layout() {
             </div>
             <h1 className="text-sm font-bold text-white tracking-[0.15em] font-mono">C.L.A.R.A.</h1>
           </div>
-          <p className="text-[9px] text-emerald-400/40 font-mono tracking-[0.25em] mt-1.5 ml-[26px]">
+          <p className="text-[9px] text-emerald-400/40 font-mono tracking-[0.25em] mt-1.5 ml-6.5">
             SYSTEM ONLINE · {soul?.version || "v2.6"}
           </p>
         </div>
@@ -329,7 +499,7 @@ export default function Layout() {
               <p className="text-[9px] uppercase tracking-[0.2em] text-white/20 font-mono flex items-center gap-1.5">
                 <User size={9} /> Operator
               </p>
-              <div className="rounded-xl bg-white/[0.03] border border-white/5 p-3.5 relative overflow-hidden group">
+              <div className="rounded-xl bg-white/3 border border-white/5 p-3.5 relative overflow-hidden group">
                 <div className="absolute top-0 right-0 p-2 opacity-10 group-hover:opacity-30 transition-opacity">
                   <Shield size={20} />
                 </div>
@@ -349,7 +519,7 @@ export default function Layout() {
             <p className="text-[9px] uppercase tracking-[0.2em] text-white/20 font-mono flex items-center gap-1.5">
               <Radio size={9} /> Active Context
             </p>
-            <div className="rounded-xl bg-gradient-to-br from-emerald-950/20 to-transparent border border-emerald-500/10 p-3 border-l-2 border-l-emerald-500/40">
+            <div className="rounded-xl bg-linear-to-br from-emerald-950/20 to-transparent border border-emerald-500/10 p-3 border-l-2 border-l-emerald-500/40">
               {tasks.filter(t => t.state === "running" || t.state === "active").length > 0 ? (
                 tasks.filter(t => t.state === "running" || t.state === "active").slice(0, 2).map((t, i) => (
                   <p key={i} className="text-[11px] text-emerald-100/70 font-mono leading-relaxed truncate">
@@ -374,7 +544,7 @@ export default function Layout() {
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {soul.skills.map((skill, i) => (
-                  <span key={i} className="text-[9px] px-2 py-1 rounded-lg bg-white/[0.04] border border-white/8
+                  <span key={i} className="text-[9px] px-2 py-1 rounded-lg bg-white/4 border border-white/8
                     text-white/40 hover:text-emerald-300 hover:border-emerald-500/30 hover:bg-emerald-500/5
                     transition-all duration-200 cursor-default font-mono">
                     {skill}
@@ -388,7 +558,7 @@ export default function Layout() {
 
         {/* vitals footer */}
         {soul && (
-          <div className="p-4 border-t border-white/5 bg-black/30 space-y-3 flex-shrink-0">
+          <div className="p-4 border-t border-white/5 bg-black/30 space-y-3 shrink-0">
             <VitalBar label="CPU" value={`${cpuPct}%`} icon={Cpu} color="emerald" warn={80} />
             <VitalBar label="RAM" value={`${ramPct}%`} icon={Activity} color="blue" warn={90} />
             <VitalBar label="VRAM" value={`${vramPct}%`} icon={Zap} color="yellow" warn={80} />
@@ -401,7 +571,7 @@ export default function Layout() {
 
         {/* header */}
         <header className="h-13 border-b border-white/5 flex items-center justify-between px-4
-          bg-[#080808]/90 backdrop-blur-md sticky top-0 z-10 flex-shrink-0">
+          bg-[#080808]/90 backdrop-blur-md sticky top-0 z-10 shrink-0">
           <button onClick={() => setIsSidebarOpen(p => !p)}
             className="p-2 hover:bg-white/5 rounded-lg transition-colors text-white/40 hover:text-white/70">
             <Layers size={18} />
@@ -495,14 +665,15 @@ export default function Layout() {
           {/* streaming bubble */}
           {streamingContent && (
             <div className="flex justify-start msg-enter">
-              <div className="max-w-[80%] p-4 rounded-2xl bg-gradient-to-br from-emerald-950/60
+              <div className="max-w-[80%] p-4 rounded-2xl bg-linear-to-br from-emerald-950/60
                 to-black/60 border border-emerald-500/20 shadow-[0_0_20px_rgba(16,185,129,0.08)]">
                 {streamingContent ? (
                   <div className="prose prose-invert prose-sm max-w-none leading-relaxed
-                    prose-code:bg-black/50 prose-code:text-emerald-300 prose-code:px-1.5 prose-code:rounded
-                    prose-pre:bg-black/70 prose-pre:border prose-pre:border-emerald-500/10 prose-pre:rounded-xl
-                    prose-a:text-emerald-400 prose-strong:text-emerald-100 prose-p:text-emerald-50/90">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingContent}</ReactMarkdown>
+                    prose-a:text-emerald-400 prose-strong:text-emerald-100 prose-p:text-emerald-50/90
+                    prose-headings:text-white prose-li:text-emerald-50/80">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                      {streamingContent}
+                    </ReactMarkdown>
                   </div>
                 ) : (
                   <div className="flex gap-1 items-center py-1">
@@ -520,7 +691,34 @@ export default function Layout() {
 
         {/* input capsule */}
         <div className="absolute bottom-0 left-0 w-full px-5 pb-5 pt-8 z-40
-          bg-gradient-to-t from-[#080808] via-[#080808]/95 to-transparent">
+          bg-linear-to-t from-[#080808] via-[#080808]/95 to-transparent">
+
+          {/* active query chips — shows in-flight user tasks with cancel */}
+          {tasks.filter(t => t.source === "user" && (t.state === "running" || t.state === "active" || t.state === "pending")).length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {tasks
+                .filter(t => t.source === "user" && (t.state === "running" || t.state === "active" || t.state === "pending"))
+                .map(t => (
+                  <div key={t.task_id} className="flex items-center gap-1.5 px-2.5 py-1
+                    rounded-full border border-emerald-500/20 bg-emerald-950/30
+                    text-[10px] font-mono text-emerald-300/70 max-w-70">
+                    <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${
+                      t.state === "running" ? "bg-emerald-400 animate-pulse" :
+                      t.state === "active"  ? "bg-blue-400 animate-pulse" : "bg-amber-400"
+                    }`} />
+                    <span className="truncate">{t.goal.replace(/^\[.*?\]\s*/, "").slice(0, 40)}{t.goal.length > 40 ? "…" : ""}</span>
+                    <button
+                      onClick={() => cancelTask(t.task_id)}
+                      className="shrink-0 ml-0.5 text-white/25 hover:text-red-400 transition-colors"
+                      title="Cancel"
+                    >
+                      <X size={9} />
+                    </button>
+                  </div>
+                ))
+              }
+            </div>
+          )}
 
           {/* image preview */}
           {selectedImage && (
@@ -546,7 +744,7 @@ export default function Layout() {
             }
           `}>
             <button onClick={() => document.getElementById("file-upload").click()}
-              className={`p-2.5 rounded-xl transition-colors flex-shrink-0
+              className={`p-2.5 rounded-xl transition-colors shrink-0
                 ${selectedImage ? "text-emerald-400 bg-emerald-900/20" : "text-white/30 hover:text-white/60 hover:bg-white/5"}`}>
               <Paperclip size={18} />
             </button>
@@ -582,7 +780,7 @@ export default function Layout() {
 
             <button onClick={sendMessage}
               disabled={!input.trim() && !selectedImage}
-              className={`p-2.5 rounded-xl transition-all duration-200 flex-shrink-0
+              className={`p-2.5 rounded-xl transition-all duration-200 shrink-0
                 ${input.trim() || selectedImage
                   ? "bg-emerald-600 text-white shadow-[0_0_20px_rgba(16,185,129,0.35)] hover:bg-emerald-500 hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] active:scale-95"
                   : "bg-white/5 text-white/20 cursor-not-allowed"
@@ -598,7 +796,7 @@ export default function Layout() {
         flex flex-col border-l border-white/5 bg-[#060606] transition-all duration-300
         ${isNeuralOpen ? "w-80" : "w-0 border-none overflow-hidden"}
       `}>
-        <div className="p-4 border-b border-white/5 flex items-center justify-between flex-shrink-0">
+        <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2 text-purple-400/70">
             <Cpu size={16} className={status === "thinking" ? "animate-[spin_3s_linear_infinite]" : ""} />
             <span className="text-xs font-bold font-mono tracking-widest">NEURAL STREAM</span>
@@ -608,7 +806,7 @@ export default function Layout() {
         <div className="flex-1 overflow-hidden flex flex-col min-h-0">
 
           {/* ── TOP: TASK BOARD ── */}
-          <div className="flex-shrink-0 border-b border-emerald-500/10 px-3 pt-3 pb-2">
+          <div className="shrink-0 border-b border-emerald-500/10 px-3 pt-3 pb-2">
             <p className="text-[9px] uppercase tracking-[0.2em] text-white/20 font-mono mb-2 flex items-center gap-1.5">
               <Clock size={9} /> Task Board
             </p>
@@ -617,41 +815,37 @@ export default function Layout() {
                 <p className="text-[10px] text-white/15 font-mono italic py-2">No active tasks</p>
               ) : (
                 tasks.slice(-12).map(t => (
-                  <TaskCard key={t.task_id} task={t} />
+                  <TaskCard key={t.task_id} task={t} onCancel={cancelTask} />
                 ))
               )}
             </div>
           </div>
 
-          {/* ── BOTTOM: THOUGHT STREAM ── */}
-          <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 scrollbar-thin min-h-0">
-            <p className="text-[9px] uppercase tracking-[0.2em] text-white/20 font-mono mb-1 flex items-center gap-1.5 sticky top-0 bg-[#060606] py-1">
-              <AlertCircle size={9} /> Thought Stream
+          {/* ── BOTTOM: QUERY CARDS ── */}
+          <div className="flex-1 overflow-y-auto px-3 py-3 scrollbar-thin min-h-0">
+            <p className="text-[9px] uppercase tracking-[0.2em] text-white/20 font-mono mb-2 flex items-center gap-1.5 sticky top-0 bg-[#060606] py-1">
+              <AlertCircle size={9} /> Query Log
             </p>
-            {thoughts.length === 0 ? (
+
+            {queryCards.length === 0 ? (
               <p className="text-[10px] text-white/15 font-mono italic">Idle</p>
             ) : (
-              thoughts.map((t, i) => {
-                const isLast = i === thoughts.length - 1;
-                return (
-                  <div key={i} className={`
-                    border-l-2 pl-3 py-1 relative transition-all duration-400
-                    ${isLast
-                      ? "border-emerald-500 opacity-100"
-                      : "border-purple-500/15 opacity-40 hover:opacity-70"}
-                  `}>
-                    <span className={`block text-[9px] font-mono mb-0.5 ${isLast ? "text-emerald-400/70" : "text-purple-400/40"}`}>
-                      {t.time}
-                    </span>
-                    <span className={`text-[11px] leading-relaxed whitespace-pre-wrap font-mono
-                      ${isLast ? "text-emerald-100/80" : "text-gray-500"}`}>
-                      {t.text}
-                    </span>
-
-                  </div>
-                );
-              })
+              queryCards.map(card => (
+                <QueryCard key={card.messageId} card={card} onToggle={toggleCard} />
+              ))
             )}
+
+            {/* system connection logs */}
+            {systemLogs.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-white/5 space-y-1">
+                {systemLogs.map((log, i) => (
+                  <p key={i} className="text-[9px] font-mono text-white/15 pl-2 border-l border-white/8 leading-relaxed">
+                    {log.text}
+                  </p>
+                ))}
+              </div>
+            )}
+
             {lastTokenUsage && (
               <div className="token-usage-pill">
                 <span className="token-label">Last query</span>

@@ -45,7 +45,13 @@ Rules:
 
 Routing guidance:
 - Single clear tool + clear args + no dependency chain → tool set, requires_planning=false
-- Vague request, multiple steps, or tool outputs feed into next step → requires_planning=true
+- Compound query with multiple INDEPENDENT sub-tasks, each trivially answerable in one tool call
+  with no output feeding into another → tool=null, requires_planning=false.
+  Example: "What is 847 * 293? Also what is the current UTC time?" — two independent FAST
+  sub-tasks (python_repl + date_time), no dependency, no ambiguity → requires_planning=false.
+  Example: "What's the capital of France and what time is it?" → requires_planning=false.
+  Do NOT escalate to DELIBERATE just because tool=null on a compound query.
+- Vague request, multiple steps where outputs feed into next step → requires_planning=true
 - Greetings, opinions, conversation → tool=null, requires_planning=false
 - System triggers (health_check, memory_maintenance, etc.) → tool=null, requires_planning=false
   (these are handled by existing background workers, do not assign tools to them)
@@ -71,6 +77,8 @@ Filesystem path rules:
 - If Alkama explicitly provides the full path → use it as-is, confidence can be high
 - If you are inferring or constructing a path → set requires_planning=true, confidence ≤ 0.70
 - NEVER assume directory names, filenames, or casing
+- File existence must NEVER be inferred from the filename. If the query asks to read or open a specific path, requires_planning=true — the filesystem must be checked regardless of what the name implies.
+- start_search searchType ENUM: valid values are "files" (by filename) or "content" (inside file). Never "file".
 
 [DISCOVERED_TOOLS] block:
 - When a [DISCOVERED_TOOLS] block is present in context, use those tool names
@@ -106,6 +114,15 @@ Examples:
 - "How much is it there?" → refer to the most recent item and location discussed
 Do NOT default to CLARA architecture or project topics when the recent
 conversation was about something else entirely.
+
+CRITICAL — filesystem read requests:
+"Read X and tell me what it does" → requires_planning=true, even if X sounds like it doesn't exist.
+The filesystem must be checked. You cannot know from the filename whether a file exists.
+Example:
+- Input: "Read core_logic/nonexistent_module.py and tell me what it does, then check agent.py for imports"
+- WRONG: {"tool": null, "requires_planning": false, "confidence": 1.0}
+- CORRECT: {"tool": "read_file", "requires_planning": true, "confidence": 0.95}
+  Reason: file existence is a filesystem fact, not inferable from the name.
 """
 
 

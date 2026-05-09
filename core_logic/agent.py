@@ -498,9 +498,21 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
             "  * Timestamps, dates of events, or anything time-sensitive\n"
             "  * Tool outputs or Glints (web search results, command output)\n"
             "  * Anything that could be stale within days or weeks\n\n"
+            "- style_update: If Alkama explicitly stated a response style preference (e.g. 'be more detailed', "
+            "'shorter responses', 'stop being verbose', 'I want more detail'), extract as one of: "
+            "\"concise\", \"detailed\", \"default\". Otherwise null.\n\n"
+            "- self_learning: Extract ONLY if ONE of these occurred:\n"
+            "  (a) Clara made a clear mistake then corrected it mid-session (e.g. wrong tool, wrong path, hallucinated result)\n"
+            "  (b) Clara discovered a new definitive fact about her own architecture not already in CLAUDE.md\n"
+            "  If neither happened, leave null. DO NOT extract routine successes, facts about Alkama, or things documented in CLAUDE.md.\n"
+            "  When extracted, provide:\n"
+            "  { \"category\": \"architecture_facts|failure_patterns|recovery_methods\",\n"
+            "    \"key\": \"one-line summary/trigger/problem (the dedup key for this category)\",\n"
+            "    \"detail\": \"specific actionable detail/correct_approach/method\",\n"
+            "    \"confidence\": 0.75 }\n\n"
             "Output ONLY a JSON object, no extra text:\n"
-            "{ \"summary\": \"Alkama asked X. Clara did Y.\", \"facts\": [\"Alkama likes Z\"] }\n"
-            "If no permanent facts qualify, leave 'facts' as []."
+            "{ \"summary\": \"Alkama asked X. Clara did Y.\", \"facts\": [], \"style_update\": null, \"self_learning\": null }\n"
+            "If no permanent facts qualify, leave 'facts' as []. If no style change, leave 'style_update' as null. If no learning, leave 'self_learning' as null."
         )
         
         try:
@@ -536,6 +548,12 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
             self.episodic_embeddings.append(new_emb)
             slog.info(f"   [Memory] Episodic embedding updated ({len(self.episodic_embeddings)} total)")
 
+            # 4b. Response style update — if Alkama stated a style preference
+            style_update = data.get("style_update")
+            if style_update and style_update in ("concise", "detailed", "default"):
+                self.db.update_response_style(style_update, note=f"Alkama requested {style_update} responses")
+                slog.info(f"   [Memory] Response style updated to: {style_update}")
+
             # 5. Save to The Vault (Long Term) - Only if facts exist
             facts = data.get("facts", [])
             if facts and isinstance(facts, list) and len(facts) > 0:
@@ -561,6 +579,41 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
                             existing_embs = torch.cat([existing_embs, fact_emb.unsqueeze(0)], dim=0)
                         else:
                             existing_embs = fact_emb.unsqueeze(0)
+
+            # 6. Self-learning — operational knowledge Clara discovered about herself
+            sl = data.get("self_learning")
+            if sl and isinstance(sl, dict):
+                category = sl.get("category", "")
+                key = sl.get("key", "").strip()
+                detail = sl.get("detail", "").strip()
+                confidence = float(sl.get("confidence", 0.75))
+                if category in ("architecture_facts", "failure_patterns", "recovery_methods") and key and detail:
+                    key_map = {
+                        "architecture_facts": "summary",
+                        "failure_patterns": "trigger",
+                        "recovery_methods": "problem",
+                    }
+                    detail_map = {
+                        "architecture_facts": "detail",
+                        "failure_patterns": "correct_approach",
+                        "recovery_methods": "method",
+                    }
+                    from datetime import date as _date
+                    existing = self.db.memory.get("self_knowledge", {}).get(category, [])
+                    new_id = f"{category[:2]}_{len(existing) + 1:03d}"
+                    entry = {
+                        "id": new_id,
+                        key_map[category]: key,
+                        detail_map[category]: detail,
+                        "confidence": confidence,
+                        "learned_at": str(_date.today()),
+                        "status": "active",
+                    }
+                    if category == "failure_patterns":
+                        entry["what_i_did"] = key
+                    added = self.db.add_self_knowledge(category, entry)
+                    if added:
+                        slog.info(f"   [Memory] Self-learning saved to {category}: {key[:60]}")
 
         except Exception as e:
             slog.error(f"   [Memory] Consolidation failed: {e}")
@@ -678,6 +731,16 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
 
             if mode == "DELIBERATE":
                 llm.append(system(self.system_prompt))
+                if archive_context:
+                    llm.append(system(
+                        "SYSTEM ARCHITECTURE DOCUMENTATION (ground truth):\n"
+                        "The following is factual documentation about how this system works. "
+                        "It describes real file locations, module names, and behaviors. "
+                        "If a tool result contradicts information stated here, treat the tool "
+                        "result as suspect and cross-validate with an alternative approach "
+                        "before accepting it.\n"
+                        + archive_context
+                    ))
 
             elif mode == "CHAT":
                 llm.append(system(CHAT_SYSTEM_PROMPT))
@@ -765,8 +828,13 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
             return final_answer
 
         except Exception as e:
+            err_str = str(e)
             slog.error(f"   [process_request] Unhandled error: {e}")
-            return f"I encountered an internal error: {e}"
+            if "DEADLINE_EXCEEDED" in err_str or "DeadlineExceeded" in err_str or "grpc" in err_str.lower():
+                return "The request timed out reaching the AI service. Please try again."
+            if "UNAVAILABLE" in err_str or "connection" in err_str.lower():
+                return "The AI service is temporarily unreachable. Please try again in a moment."
+            return "Something went wrong on my end. Please try again."
 
     async def _run_fast(self, interpreted: dict, on_step_update=None, llm=None) -> str:
         """
@@ -992,7 +1060,6 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
             slog.info(f"[Loop {turn_count}] Thinking (Streaming)...")
 
             raw_content = ""
-            answer_sent_len = 0
             last_response_obj = None
 
             # 1. Open the Live Pipe (Native xai_sdk syntax)
@@ -1004,20 +1071,8 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
 
                 raw_content += token
 
-                # STATE C: The user-facing answer.
-                if "Final Answer:" in raw_content:
-                    start_idx = raw_content.find("Final Answer:") + 13
-                    current_answer = raw_content[start_idx:]
-
-                    # Only send the NEW characters
-                    new_chars = current_answer[answer_sent_len:]
-                    if new_chars and on_step_update:
-                        await on_step_update(new_chars, type="stream", turn_id=turn_count)
-                        answer_sent_len += len(new_chars)
-                        await asyncio.sleep(0.02)
-
                 # STATE B: The code.
-                elif "Action:" in raw_content:
+                if "Action:" in raw_content:
                     pass
 
                 # STATE A: The internal monologue.
@@ -1037,9 +1092,12 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
 
             await asyncio.sleep(0.05)  # yield to event loop so UI updates flush before next turn
 
-            pre_glint = raw_content.split("Glint:")[0].strip() if "Glint:" in raw_content else None
+            # Matches both "Glint:" and "Glint from tool_name:" hallucination patterns
+            _glint_re = re.compile(r'Glint(?:\s+from\s+[\w._-]+)?\s*:', re.IGNORECASE)
+            has_glint = bool(_glint_re.search(raw_content))
+            pre_glint = _glint_re.split(raw_content)[0].strip() if has_glint else None
 
-            if "Glint:" in raw_content and "Action:" not in raw_content:
+            if has_glint and "Action:" not in raw_content:
                 # Bare fabricated Glint — no Action at all
                 slog.warning("   [System] Hallucinated Glint detected (no Action) — correcting.")
                 llm.append(assistant(pre_glint))
@@ -1050,7 +1108,7 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
                     "Do not simulate or assume tool results. Continue with a valid Action."
                 ))
                 continue
-            elif "Glint:" in raw_content and "Action:" in raw_content:
+            elif has_glint and "Action:" in raw_content:
                 # Inline fabrication — model wrote Action then immediately invented the Glint
                 # without waiting for system execution. Strip the fabricated Glint, execute real Action.
                 slog.warning("   [System] Inline hallucination detected (Action + fabricated Glint in same turn) — stripping fabricated Glint.")
@@ -1071,6 +1129,8 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
 
             if "Final Answer:" in response_text:
                 final = response_text.split("Final Answer:")[-1].strip()
+                if on_step_update:
+                    await on_step_update(final, type="stream", turn_id=turn_count)
                 slog.info(f">> [DELIBERATE] Final Answer:\n{final}")
                 return final, deliberate_usage_list
 

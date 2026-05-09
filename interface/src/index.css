@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 :root {
   --bg-void:    #050505;
@@ -93,8 +94,45 @@ body {
 .animate-spin-slow { animation: spin-slow 3s linear infinite; }
 
 /* ── prose tweaks ─────────────────────────────────────────────────────────── */
+.prose {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
 .prose pre { overflow-x: auto; }
 .prose code::before, .prose code::after { content: none !important; }
+
+/* table: horizontal scroll wrapper (injected via custom component) */
+.prose-table-wrap { overflow-x: auto; }
+.prose table {
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  width: 100%;
+}
+.prose thead th {
+  background: rgba(16, 185, 129, 0.07);
+  color: #ecfdf5;
+  padding: 7px 12px;
+  text-align: left;
+  border-bottom: 1px solid rgba(16, 185, 129, 0.2);
+  white-space: nowrap;
+}
+.prose tbody td {
+  padding: 6px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  vertical-align: top;
+}
+.prose tbody tr:hover td {
+  background: rgba(16, 185, 129, 0.025);
+}
+
+/* blockquote (quote feature uses this) */
+.prose blockquote {
+  border-left-color: rgba(16, 185, 129, 0.35);
+  background: rgba(16, 185, 129, 0.04);
+  border-radius: 0 8px 8px 0;
+  padding: 8px 14px;
+  font-style: normal;
+}
+.prose blockquote p { margin: 0; }
 
 /* ── Token Usage Pill ──────────────────────────────────────────────────────── */
 .token-usage-pill {

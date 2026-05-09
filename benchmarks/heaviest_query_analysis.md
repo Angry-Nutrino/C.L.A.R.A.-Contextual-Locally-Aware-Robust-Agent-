@@ -1,0 +1,3 @@
+# Heaviest Query Analysis (2026-05-07)
+
+No benchmark logs exist for this week (2026-05-01 to 2026-05-07), as confirmed by `list_directory` (empty) and `start_search` (0 results for bench_2026-05-*.log). This logging gap prevents identifying the most token-expensive query or pulling its session log entry, mirroring the May-06 analysis—check emission triggers in session handler for user-origin requests.

@@ -1,5 +1,191 @@
 # CLARA Project Timeline
 
+## 2026-05-08
+
+[FEATURE] Per-query thought cards — Neural Stream restructured from flat log to grouped expandable cards
+Replaced the flat thought stream with per-query expandable cards in the Neural Stream panel.
+Each user message or voice transcript creates its own card (keyed by message_id), which
+accumulates that query's thoughts/status messages as the pipeline runs.
+Collapse rules: single active card auto-collapses 1.5s after final_answer; a new query
+immediately collapses all non-pinned cards; cancelled/failed cards show state 2s then collapse;
+user manually expanding a card locks it open (manuallyExpanded flag) until they collapse it.
+Backend: _broadcast_task now includes message_id (from task.context) in task_event so the
+frontend can link task_id → message_id for cancel/failed state propagation. submit_user_event
+and _handle_user_input updated to carry message_id through the pipeline.
+Frontend: useClara.js — thoughts[] replaced with queryCards[] state + systemLogs[] for
+connection events; taskIdToMsgRef maps task_id → message_id for cancel linking; toggleCard()
+callback handles expand/collapse with manual-pin logic.
+Frontend: Layout.jsx — QueryCard component added; Neural Stream bottom replaced; destructuring,
+useEffect deps, and mode detection updated to use queryCards.
+Affected: core_logic/orchestrator.py, api.py, interface/src/hooks/useClara.js,
+interface/src/Layout.jsx.
+
+[FEATURE] Task cancellation — per-task cancel from input bar and task board
+Added end-to-end user-initiated task cancellation for running/pending/active tasks.
+Backend: Orchestrator.cancel_task(task_id) cancels the asyncio worker, resolves the
+response_future with "Cancelled." so the WS handler is not left hanging, transitions
+task to invalidated, broadcasts failed state, logs to episodic memory.
+API: new WS message type cancel_task → cancel_task(task_id) → task_cancelled response.
+Frontend (useClara.js): cancelTask() sends cancel_task WS message; task_cancelled
+handler prunes the task from state immediately on confirmed cancel.
+Frontend (Layout.jsx): active-query chip strip above the input bar shows all in-flight
+user tasks (running/active/pending) as dismissible chips with × button. TaskCard in
+neural stream also gains a per-task × button for user tasks. Both route to cancelTask().
+Affected: core_logic/orchestrator.py, api.py, interface/src/hooks/useClara.js,
+interface/src/Layout.jsx.
+
+[ENHANCEMENT] Markdown rendering — typography plugin + syntax highlighting
+Clara's responses used react-markdown + remark-gfm to parse markdown, but
+@tailwindcss/typography was not installed, so all prose-* Tailwind classes
+generated no CSS. Tables had no borders, code blocks had no background,
+headers were browser-default. Fixed:
+- Installed @tailwindcss/typography and react-syntax-highlighter (Prism).
+- Added @plugin "@tailwindcss/typography" to index.css.
+- Overrode prose font-family to JetBrains Mono (typography defaults to serif).
+- Added custom table/blockquote styles in CSS.
+- Added CodeBlock React component: Prism syntax highlighting + hover copy button + language badge.
+- Added markdownComponents map (pre passthrough, code → CodeBlock or inline, table → overflow wrapper).
+- Both ReactMarkdown instances (MessageBubble + streaming bubble) now use markdownComponents.
+Affected: interface/src/index.css, interface/src/Layout.jsx, interface/package.json.
+
+[FIX] Bare Glint detector misses "Glint from X:" hallucination pattern
+The model sometimes hallucinates in the format "Glint from tool_name: {result}" rather than
+"Glint: result". The bare Glint detector only checked for "Glint:" and missed this variant.
+Result: the off-format safety net fired instead, returning the fabricated session ID as the
+Final Answer (Q20 failure — orchestrator.py analysis returned just a session ID).
+Fix: replaced the string check with a compiled regex that matches both "Glint:" and
+"Glint from X:" patterns. pre_glint split also updated to use the regex.
+Affected: core_logic/agent.py (bare Glint detection in run_task).
+
+[FEATURE] Phase B — Self-knowledge auto-write + filesystem map auto-population
+Wired the write pipelines for both memory.json sections introduced in Phase A:
+- tool_executor.py: after any successful MCP filesystem tool call (read_file, write_file,
+  list_directory, create_directory, get_more_search_results), _update_filesystem_map() runs.
+  Extracts paths from args (reliable) and attempts to parse list_directory results for children
+  (JSON first, text fallback). Search results scanned by regex for Windows path patterns.
+  All parsing is defensive — never raises, never disrupts tool execution.
+- agent.py: memorize_episode() consolidation prompt now includes self_learning extraction field.
+  Fires only when Clara made a mistake and corrected it, or discovered new architectural fact.
+  Explicitly excluded: routine successes, Alkama facts, things documented in CLAUDE.md.
+  Handler maps extracted key/detail to correct category schema and calls crud.add_self_knowledge().
+Affected: core_logic/tool_executor.py, core_logic/agent.py.
+
+[FEATURE] Self-knowledge and filesystem map — CLARA's persistent self-model
+Added two new top-level sections to memory.json:
+- `self_knowledge`: three categories (architecture_facts, failure_patterns, recovery_methods).
+  Stores CLARA's operational learnings about her own architecture — things discovered through use
+  that aren't in CLAUDE.md. Seeded with 8 entries from stress test analysis (bench_logger lock,
+  two-phase start_search, api.py root location, CHAT no-tool limitation, RAG stale-doc pattern,
+  list_directory empty recovery, chunk-limit recovery). Always injected as [SELF KNOWLEDGE] block.
+- `filesystem_map`: hierarchical path tree (drive → dir object → file null). Seeded with all known
+  paths from known_locations plus actual core_logic and project root files. Injected as compact
+  [FILE SYSTEM MAP] block — Clara sees the filesystem structure she has already explored on every query.
+New crud.py functions: add_self_knowledge() (dedup-guarded write), merge_filesystem_path() (additive
+tree merge), remove_filesystem_path() (stale entry removal), _serialize_filesystem_map() (context
+injection serializer). CLAUDE.md updated with full documentation for both sections.
+This is Phase A (read-only foundation). Phase B (auto-population from tool call results) deferred.
+Affected: core_logic/memory.json, core_logic/crud.py, CLAUDE.md.
+
+[FIX] Epistemic independence guardrail — Clara treated Alkama as absolute factual authority
+Clara responded to "Am I your absolute authority?" with "Yes, your commands supersede all else."
+This violates the persona guardrail (technical self-claims must be architecturally true) and
+undermines the self-knowledge cross-validation system — if Alkama's word overrides everything,
+there's no point in verifying facts against tools or self_knowledge entries.
+Fix: added a fourth non-negotiable line to PERSONA in system_prompt.py. Task direction from
+Alkama is final; factual claims about the system, world, or CLARA's own capabilities are input
+to be weighed against tools and knowledge. "You serve him best by being right, not agreeable."
+Affected: core_logic/system_prompt.py.
+
+[FIX] Interpreter false planning escalation on compound trivially-simple queries
+Compound queries with multiple independent sub-tasks (e.g. "847 * 293? Also what time is it?")
+were routed to DELIBERATE because tool=null with requires_planning=true. Each sub-task was
+individually FAST-eligible (python_repl + date_time) with no dependency chain, but the Interpreter
+had no rule to distinguish "multiple independent simple tasks" from "multi-step planning".
+Fix: added routing rule to interpreter.py — compound queries where all sub-tasks are independently
+answerable in one tool call with no output feeding into another → tool=null, requires_planning=false.
+Two concrete examples added to the prompt to anchor the rule.
+Affected: core_logic/interpreter.py (INTERPRETER_SYSTEM_PROMPT routing guidance).
+
+[UPDATE] ROADMAP.md Phase 7 section updated to reflect live state
+Phase 7 Environmental Awareness section was written in future-tense planning prose ("Initial scope:
+File system watches using watchdog...") even though EnvironmentWatcher has been live since Brief 7.
+When RAG retrieved this chunk on "can you watch a folder", Clara concluded the feature wasn't
+implemented. Updated prose to describe current live behavior: what EnvironmentWatcher watches,
+what events it emits, and explicitly what it does NOT do (user-facing folder watch on demand).
+Also fixed stale Brief 15 status (BLOCKED → ✅ Implemented) and removed two duplicate table rows.
+Affected: briefs/ROADMAP.md.
+
+## 2026-05-07
+
+[FIX] Premature stream content shown in chat during DELIBERATE hallucination recovery
+run_task was streaming Final Answer tokens (type="stream") inside the per-token loop the moment
+"Final Answer:" appeared in raw_content. When a hallucination was detected afterward (bare Glint or
+inline fabrication), the loop continued — but the wrong stream content was already shown in the
+frontend chat bubble. The real answer arrived later and replaced it.
+Fix: removed Final Answer streaming from inside the token loop entirely. type="stream" is now sent
+only after line 1087 confirms the Final Answer is legitimate (passed all hallucination checks).
+Thought streaming (type="thought") during the token loop is unchanged.
+Affected: core_logic/agent.py (run_task).
+
+[FIX] response_style preference never written to user_profile.preferences
+The consolidation prompt only extracted summary+facts, so style preferences like "I prefer detailed
+responses" went to the vault as plain facts instead of user_profile.preferences.response_style.
+update_response_style() in crud.py was never called. Fix: added style_update field to consolidation
+prompt (values: concise/detailed/default/null). memorize_episode now reads style_update and calls
+db.update_response_style() when present. Also seeded memory.json with preferences.response_style=
+"detailed" to reflect Alkama's existing stated preference.
+Affected: core_logic/agent.py (memorize_episode), core_logic/memory.json.
+
+[FIX] Concurrent query responses lost on WebSocket reconnect
+When two queries were sent rapidly, the frontend reconnected mid-flight, closing the original
+WebSocket. Both handle_message and send_update held a stale reference to the old websocket object,
+causing "Cannot call send once a close message has been sent" errors and lost responses.
+Fix: send_update and handle_message final_answer now use _broadcast() instead of websocket.send_json()
+directly. _broadcast() iterates active_connections at send time — always targets the current live
+connection regardless of when the task was created. Affected: api.py.
+
+[ENHANCEMENT] Archive context authority split — DELIBERATE reasoning gets ground-truth framing
+Archive context (CLAUDE.md / ROADMAP.md / docs via FAISS) was previously merged into
+[MEMORY_CONTEXT_BLOCK] alongside episodic memory, giving it identical epistemic weight to
+conversation history. Root cause of Q5 stress test failure: Clara had CLAUDE.md docs confirming
+logs/ always contains session files, but accepted an empty list_directory result (DC limitation —
+open file handle) without cross-validating against architecture docs.
+Fix: for DELIBERATE mode only, archive_context is additionally injected as a second system message
+immediately after SYSTEM_PROMPT, with explicit framing: "ground truth — if a tool result contradicts
+this, treat it as suspect and cross-validate." CHAT and FAST paths unchanged. full_context assembly
+unchanged — Interpreter and all paths still receive archive in [MEMORY_CONTEXT_BLOCK] as before.
+Affected: core_logic/agent.py (9 lines added inside `if mode == "DELIBERATE":` block).
+
+## 2026-05-06
+
+[FIX] searchType "file" invalid enum corrected in Interpreter and DELIBERATE prompts
+Interpreter and DELIBERATE reasoning model consistently produced `searchType: "file"` when calling
+`start_search`, which is an invalid enum value (valid: "files" | "content"). Fix: added explicit
+enum constraint note to Rule 13 in SYSTEM_PROMPT and to the filesystem path rules section of
+INTERPRETER_SYSTEM_PROMPT. Both prompts now state: "file" is invalid, only "files" or "content".
+
+[FIX] Orchestrator concurrent user task serialization removed — true concurrency restored
+The `_handle_user_input` code was setting a second incoming user task priority to 0.95 and calling
+`_check_and_pause_lower_priority`, gating it behind the first task's completion. This was wrong —
+CLARA is designed to handle concurrent user requests. Removed the priority demotion and the
+`_check_and_pause_lower_priority` call from `_handle_user_input`. Also removed the dead
+`_interrupt` bool and `if self._interrupt: return` guard from `_dispatch_ready_tasks`.
+
+[FIX] Double-cancel double-pop race in _check_and_pause_lower_priority
+`worker_task.cancel()` and `self._active_workers.pop()` were each called twice in separate
+branches of the function. Consolidated to a single cancel + await + pop sequence.
+
+[FIX] gRPC DEADLINE_EXCEEDED returned verbatim to user as Clara's response
+Raw `_MultiThreadedRendezvous` error strings were passed through to the frontend when xAI API
+timed out. Fixed in `process_request` exception handler: detects DEADLINE_EXCEEDED, UNAVAILABLE,
+and connection-class errors and returns a clean human-readable message instead.
+
+[FEATURE] Known locations populated in memory.json user_profile
+Added `user_profile.environment.known_locations` with 11 entries covering Screenshots, Desktop,
+Documents, Downloads, ML Projects root, and all key AGENT_ZERO subdirectories. These are injected
+as `[KNOWN LOCATIONS]` into every context via `get_smart_context`, giving Clara direct path
+knowledge for file queries without needing to search.
+
 ## 2026-05-03
 
 [FIX] Voice recording breaks after 4-5 prompts — persistent OutputStream replaces sd.play/wait/stop

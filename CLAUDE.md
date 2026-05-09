@@ -516,7 +516,7 @@ When Alkama says "you're too verbose" or "give more detail", `memorize_episode` 
 non-default. This reaches all three paths. Updates persist in `memory.json` until changed.
 
 ### File System Awareness
-`user_profile.environment.known_locations` in `memory.json` holds key path mappings.
+`user_profile.environment.known_locations` in `memory.json` holds labeled shortcut path mappings (human-readable bookmarks).
 `get_smart_context` injects a `[KNOWN LOCATIONS]` block into every context string.
 Add entries manually to `memory.json` when new paths need to be known. Format:
 ```json
@@ -527,6 +527,51 @@ Add entries manually to `memory.json` when new paths need to be known. Format:
   }
 }
 ```
+
+### Self-Knowledge (CLARA's persistent self-model)
+`self_knowledge` is a top-level key in `memory.json`. It stores CLARA's operational learnings about her own architecture, failure patterns, and recovery methods — things discovered through use that are not in CLAUDE.md.
+
+Three categories:
+- `architecture_facts` — definitive facts about how the system works (e.g., which file contains which handler, two-phase tool behavior)
+- `failure_patterns` — specific past mistakes with the correct approach documented alongside (status: active | resolved)
+- `recovery_methods` — specific procedures that worked when a tool or path failed
+
+Each entry has: `id`, `summary`/`trigger`/`problem`, `detail`/`correct_approach`/`method`, `confidence`, `learned_at`, `status`.
+
+Injection: `get_smart_context()` injects all `status: active` entries as `[SELF KNOWLEDGE]` block into every request. CLAUDE.md takes precedence — self_knowledge complements but never overrides architecture documentation.
+
+Write path: `crud.add_self_knowledge(category, entry)` with exact-string dedup on the primary key field. Called from `memorize_episode()` when consolidation extracts a `self_learning` entry.
+
+Cap: keep under 20 total entries. Mark resolved entries `"status": "resolved"` when the underlying code fix is applied — they are excluded from injection automatically and can be pruned manually.
+
+### Filesystem Map (progressively discovered path tree)
+`filesystem_map` is a top-level key in `memory.json`. It holds a hierarchical tree of the filesystem that CLARA builds up as she explores via tool calls.
+
+Schema:
+- Drive letter = top-level key (`"C"`, `"E"`)
+- Directory = key → object `{}` (empty = known but unexplored; populated = partially known)
+- File = key → `null`
+
+```json
+"filesystem_map": {
+  "E": {
+    "ML PROJECTS": {
+      "AGENT_ZERO": {
+        "api.py": null,
+        "core_logic": { "agent.py": null, "tools.py": null }
+      }
+    }
+  }
+}
+```
+
+Injection: `get_smart_context()` serializes the tree as compact indented text under `[FILE SYSTEM MAP]`. Files shown inline per directory (up to 8, then `[+N more]`); unexplored dirs labeled `[unexplored]`.
+
+Write paths:
+- `crud.merge_filesystem_path(path_str, is_file)` — additive merge, never overwrites existing nodes
+- `crud.remove_filesystem_path(path_str)` — removes a stale entry on confirmed not-found
+
+Population is manual/Phase-A only. Phase B will wire `tool_executor.py` to auto-populate after successful filesystem tool calls.
 
 ### Interpreter Logging
 Full raw JSON output now logged: `>> [Interpreter] Raw output:\n{full_json}`

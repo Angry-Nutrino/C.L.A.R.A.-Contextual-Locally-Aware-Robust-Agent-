@@ -1,0 +1,2 @@
+import core_logic.definitely_does_not_exist
+print(core_logic.definitely_does_not_exist.version)

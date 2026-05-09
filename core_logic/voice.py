@@ -26,7 +26,7 @@ WHISPER_DEVICE  = "cuda"
 WHISPER_COMPUTE = "int8"
 SAMPLE_RATE     = 16000
 KOKORO_VOICE    = "af_sky"
-KOKORO_SPEED    = 1.1
+KOKORO_SPEED    = 1.4
 KOKORO_LANG     = "en-us"
 KOKORO_SR       = 24000   # Kokoro v0.19 fixed output sample rate
 PLAY_CHUNK_FRAMES = 4800  # 0.2s chunks at 24kHz — stop_flag checked between each
@@ -70,12 +70,21 @@ class VoiceCoordinator:
     def load(self):
         """Load Whisper and Kokoro models, open mic + speaker streams."""
         slog.info("[Voice] Loading Faster-Whisper...")
-        self._whisper = WhisperModel(
-            WHISPER_MODEL,
-            device=WHISPER_DEVICE,
-            compute_type=WHISPER_COMPUTE,
-        )
-        slog.info("[Voice] Whisper loaded.")
+        try:
+            self._whisper = WhisperModel(
+                WHISPER_MODEL,
+                device=WHISPER_DEVICE,
+                compute_type=WHISPER_COMPUTE,
+            )
+            slog.info(f"[Voice] Whisper loaded on {WHISPER_DEVICE}.")
+        except Exception as cuda_err:
+            slog.warning(f"[Voice] Whisper CUDA failed ({cuda_err}) — falling back to CPU.")
+            self._whisper = WhisperModel(
+                WHISPER_MODEL,
+                device="cpu",
+                compute_type="int8",
+            )
+            slog.info("[Voice] Whisper loaded on CPU (slower STT, ~3-8s per utterance).")
 
         current_dir = os.path.dirname(os.path.abspath(__file__))
         onnx_path   = os.path.join(current_dir, "models", "kokoro-v0_19.onnx")
