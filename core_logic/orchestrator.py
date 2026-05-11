@@ -25,7 +25,8 @@ class Orchestrator:
         self._task_graph = task_graph
         self._running: bool = False
         self._loop_task: asyncio.Task | None = None
-        self._active_workers: dict = {}  # task_id → asyncio.Task
+        self._active_workers: dict = {}   # task_id → asyncio.Task
+        self._task_resources: dict = {}   # task_id → {"reads": set, "writes": set}
         self._conflict_detector  = ConflictDetector()
         self._arbitration_engine = ArbitrationEngine()
         self._tracer = tracer
@@ -282,6 +283,7 @@ class Orchestrator:
 
         # Inject non-serializable runtime objects directly into in-memory context.
         # These are never persisted to SQLite — futures and callbacks are transient.
+        task.context["task_id"] = task.id
         task.context["on_step_update"] = on_step_update
         task.context["on_interpreted"] = on_interpreted
         task.context["response_future"] = future
@@ -307,8 +309,9 @@ class Orchestrator:
             if task.id in self._active_workers:
                 continue  # already running
 
-            # Conflict check before dispatch
-            conflicts = self._conflict_detector.check(task, running)
+            # Conflict check before dispatch — pass live resource ledger so the
+            # detector sees what running tasks are actually touching right now.
+            conflicts = self._conflict_detector.check(task, running, live_resources=self._task_resources)
             result    = self._arbitration_engine.arbitrate(task, conflicts, running)
 
             self._trace(
@@ -610,7 +613,42 @@ class Orchestrator:
                     except Exception as e:
                         slog.error(f"[Orchestrator] Episodic log failed: {e}")
             else:
-                # User task — full pipeline via process_request
+                # User task — inject awareness + resource tracking before calling process_request.
+
+                # Layer 2: tell this task what else is currently running so Clara
+                # can reason about potential overlap without needing to ask.
+                other_running = [
+                    t for tid, t in self._task_graph._tasks.items()
+                    if tid != task.id and t.state in ("running", "active")
+                ]
+                if other_running:
+                    lines = [f"  - \"{t.goal[:80]}\"" for t in other_running]
+                    ctx["active_tasks_context"] = (
+                        "[ACTIVE TASKS — other work currently in progress]\n"
+                        + "\n".join(lines)
+                        + "\nIf your task may touch the same files or resources, be aware of the overlap."
+                    )
+                    slog.info(
+                        f"[Orchestrator] [ACTIVE TASKS] injected into task {task.id[:8]}: "
+                        + ", ".join(f"{t.id[:8]}" for t in other_running)
+                    )
+
+                # Layer 3: resource callback — registers filesystem touches into the
+                # live ledger so ConflictDetector has ground-truth data at dispatch time.
+                _orch = self
+                _task_id = task.id
+
+                def _resource_callback(tool_name: str, path: str, mode: str) -> None:
+                    if not path:
+                        return
+                    ledger = _orch._task_resources.setdefault(_task_id, {"reads": set(), "writes": set()})
+                    if mode == "write":
+                        ledger["writes"].add(path)
+                    else:
+                        ledger["reads"].add(path)
+
+                ctx["resource_callback"] = _resource_callback
+
                 result = await self._agent.process_request(
                     query=ctx["text"],
                     image_data=ctx.get("image_data"),
@@ -650,3 +688,6 @@ class Orchestrator:
             ))
         finally:
             self._active_workers.pop(task.id, None)
+            self._task_resources.pop(task.id, None)   # clean up Layer 3 ledger
+            from .resource_ledger import resource_ledger as _rl
+            _rl.release_task(task.id)                  # clean up read hashes + write locks

@@ -28,6 +28,28 @@ from .tool_registry import format_tool_schemas_for_context
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 
+# Filesystem tools whose paths feed the live resource ledger in the orchestrator.
+_FS_WRITE_TOOLS = frozenset({"write_file", "create_directory"})
+_FS_READ_TOOLS  = frozenset({"read_file", "list_directory", "start_search", "get_file_info"})
+
+
+def _extract_resource_path(tool_input: str) -> str:
+    """
+    Pull the 'path' value out of a DELIBERATE tool_input string.
+    tool_input is either a JSON-serialized action item or a flat string.
+    Returns empty string if no path can be extracted — caller skips silently.
+    """
+    import json as _json
+    stripped = tool_input.strip()
+    if stripped.startswith("{"):
+        try:
+            return _json.loads(stripped).get("path", "")
+        except Exception:
+            return ""
+    # Flat string — treat as path only when the tool expects one as primary arg.
+    return stripped
+
+
 def _turn_message(current_turn: int, max_turns: int, body: str) -> str:
     """
     Prepend [Turn N/M] to every Glint message so the model knows its budget.
@@ -694,11 +716,20 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
                         f">> [DISCOVERED_TOOLS] Full context injected to Interpreter:\n{tool_context}"
                     )
 
+            # Layer 2: active task awareness — injected by orchestrator._run_worker
+            active_tasks_context = task_context.get("active_tasks_context", "") if task_context else ""
+            # Layer 3: resource callback — registered by orchestrator._run_worker
+            resource_callback = task_context.get("resource_callback") if task_context else None
+            # Layer 3+: task_id for resource ledger (read-hash + write-lock checks)
+            task_id = task_context.get("task_id") if task_context else None
+
             full_context = mem_context
             if archive_context:
                 full_context += "\n" + archive_context
             if tool_context:
                 full_context += tool_context
+            if active_tasks_context:
+                full_context += "\n" + active_tasks_context
 
             # 2. Interpret
             interp_timer = Timer()
@@ -758,11 +789,11 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
             chat_usage = None
             deliberate_usage_list = []
             if mode == "FAST":
-                final_answer, fast_usage = await self._run_fast(interpreted, on_step_update, llm)
+                final_answer, fast_usage = await self._run_fast(interpreted, on_step_update, llm, resource_callback=resource_callback, task_id=task_id)
             elif mode == "CHAT":
                 final_answer, chat_usage = await self._run_chat(llm, on_step_update)
             else:
-                final_answer, deliberate_usage_list = await self.run_task(on_step_update=on_step_update, llm=llm)
+                final_answer, deliberate_usage_list = await self.run_task(on_step_update=on_step_update, llm=llm, resource_callback=resource_callback, task_id=task_id)
             exec_ms = exec_timer.elapsed_ms()
 
             # 6. Token aggregation
@@ -836,7 +867,7 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
                 return "The AI service is temporarily unreachable. Please try again in a moment."
             return "Something went wrong on my end. Please try again."
 
-    async def _run_fast(self, interpreted: dict, on_step_update=None, llm=None) -> str:
+    async def _run_fast(self, interpreted: dict, on_step_update=None, llm=None, resource_callback=None, task_id=None) -> str:
         """
         FAST_EXECUTION: execute the Interpreter-specified tool directly,
         or respond conversationally when tool is None.
@@ -852,9 +883,15 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
                 slog.info(f">> [FAST] tool={tool_name} args={str(args)[:80]}")
                 if on_step_update:
                     await on_step_update(f"Running {tool_name}...", type="status")
-                tool_result = await self._execute_fast_tool(tool_name, args)
+                tool_result = await self._execute_fast_tool(tool_name, args, task_id=task_id)
                 if tool_result.startswith("Error"):
                     raise ValueError(tool_result)
+                # Register resource into live ledger (Layer 3)
+                if resource_callback and tool_name in (_FS_WRITE_TOOLS | _FS_READ_TOOLS):
+                    path = args.get("path", "")
+                    if path:
+                        mode = "write" if tool_name in _FS_WRITE_TOOLS else "read"
+                        resource_callback(tool_name, path, mode)
 
             # Format response with non-reasoning model for speed
             format_llm = self.client.chat.create(model="grok-4-1-fast-non-reasoning")
@@ -924,7 +961,7 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
             if llm is not None:
                 llm.append(assistant(failure_note))
 
-            final_answer, deliberate_usage_list = await self.run_task(on_step_update=on_step_update, llm=llm)
+            final_answer, deliberate_usage_list = await self.run_task(on_step_update=on_step_update, llm=llm, resource_callback=resource_callback, task_id=task_id)
             return final_answer, deliberate_usage_list
 
     async def _run_chat(self, llm, on_step_update=None) -> tuple:
@@ -953,10 +990,10 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
         llm.append(assistant(response))
         return response, chat_usage
 
-    async def _execute_fast_tool(self, tool_name: str, args: dict) -> str:
+    async def _execute_fast_tool(self, tool_name: str, args: dict, task_id: str = None) -> str:
         """Delegates to unified tool executor."""
         return await execute_fast(
-            tool_name, args, self.tool_registry, self.mcp_client
+            tool_name, args, self.tool_registry, self.mcp_client, task_id=task_id
         )
 
     # def run(self, direct_input=None, image_data=None) -> str:
@@ -1046,7 +1083,7 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
                 
                 
             
-    async def run_task(self, on_step_update=None, llm=None):
+    async def run_task(self, on_step_update=None, llm=None, resource_callback=None, task_id=None):
         if llm is None:
             llm = self.llm
         max_turns = 8
@@ -1175,13 +1212,21 @@ Treat it as your memory. Use it to maintain continuity and avoid repeating known
                         if len(tool_input) > 60
                         else f"   -> Tool: {tool_name} ({tool_input})"
                     )
-                    return await execute_deliberate(
+                    result = await execute_deliberate(
                         tool_name,
                         tool_input,
                         self.tool_registry,
                         self.mcp_client,
                         encode_fn=self._encode,
+                        task_id=task_id,
                     )
+                    # Register filesystem touches into live resource ledger (Layer 3)
+                    if resource_callback and tool_name in (_FS_WRITE_TOOLS | _FS_READ_TOOLS):
+                        path = _extract_resource_path(tool_input)
+                        if path and not result.lower().startswith(("error", "tool error")):
+                            mode = "write" if tool_name in _FS_WRITE_TOOLS else "read"
+                            resource_callback(tool_name, path, mode)
+                    return result
 
                 # Run all valid tools concurrently
                 if valid_actions:

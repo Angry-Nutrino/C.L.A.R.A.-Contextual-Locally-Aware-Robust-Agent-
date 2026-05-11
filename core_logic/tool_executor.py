@@ -20,6 +20,7 @@ import asyncio
 import json
 import re
 from .session_logger import slog
+from .resource_ledger import resource_ledger
 
 # ── Filesystem tools whose paths we track in filesystem_map ──────────────────
 _FS_PATH_TOOLS = frozenset({
@@ -137,7 +138,7 @@ NATIVE_TOOLS = frozenset({
 })
 
 
-async def execute_fast(tool_name: str, args: dict, registry, mcp_client) -> str:
+async def execute_fast(tool_name: str, args: dict, registry, mcp_client, task_id: str = None) -> str:
     """
     Execute a tool called from the FAST path.
     args: structured dict from Interpreter output.
@@ -188,9 +189,31 @@ async def execute_fast(tool_name: str, args: dict, registry, mcp_client) -> str:
         elif registry is not None:
             server = registry.get_server(tool_name)
             if server and server != "native" and mcp_client is not None:
-                # Direct await — mcp_client.call is async, never wrap in to_thread
-                result = await mcp_client.call(server, tool_name, args)
+                # Resource ledger: write conflict check + exclusive lock
+                if task_id and tool_name == "write_file":
+                    path = args.get("path", "")
+                    if path:
+                        ok, reason = resource_ledger.check_write(task_id, path)
+                        if not ok:
+                            return f"Error: {reason}"
+                        write_lock = await resource_ledger.acquire_write(path, task_id)
+                        try:
+                            result = await mcp_client.call(server, tool_name, args)
+                        finally:
+                            write_lock.release()
+                    else:
+                        result = await mcp_client.call(server, tool_name, args)
+                else:
+                    result = await mcp_client.call(server, tool_name, args)
+
                 result_str = result if isinstance(result, str) else str(result)
+
+                # Resource ledger: record read hash after successful read_file
+                if task_id and tool_name == "read_file":
+                    path = args.get("path", "")
+                    if path and not result_str.lower().startswith(("error:", "tool error:")):
+                        resource_ledger.record_read(task_id, path, result_str)
+
                 _update_filesystem_map(tool_name, args, result_str)
                 return result_str
             elif server is None:
@@ -211,6 +234,7 @@ async def execute_deliberate(
     registry,
     mcp_client,
     encode_fn=None,
+    task_id: str = None,
 ) -> str:
     """
     Execute a tool called from the DELIBERATE ReAct loop.
@@ -284,9 +308,32 @@ async def execute_deliberate(
             if server and server != "native" and mcp_client is not None:
                 schema = registry.get_schema(tool_name)
                 mcp_args = _build_args_from_query(tool_name, query, schema)
-                # Direct await — mcp_client.call is async
-                result = await mcp_client.call(server, tool_name, mcp_args)
+
+                # Resource ledger: write conflict check + exclusive lock
+                if task_id and tool_name == "write_file":
+                    path = mcp_args.get("path", "")
+                    if path:
+                        ok, reason = resource_ledger.check_write(task_id, path)
+                        if not ok:
+                            return f"Error: {reason}"
+                        write_lock = await resource_ledger.acquire_write(path, task_id)
+                        try:
+                            result = await mcp_client.call(server, tool_name, mcp_args)
+                        finally:
+                            write_lock.release()
+                    else:
+                        result = await mcp_client.call(server, tool_name, mcp_args)
+                else:
+                    result = await mcp_client.call(server, tool_name, mcp_args)
+
                 result_str = result if isinstance(result, str) else str(result)
+
+                # Resource ledger: record read hash after successful read_file
+                if task_id and tool_name == "read_file":
+                    path = mcp_args.get("path", "")
+                    if path and not result_str.lower().startswith(("error:", "tool error:")):
+                        resource_ledger.record_read(task_id, path, result_str)
+
                 _update_filesystem_map(tool_name, mcp_args, result_str)
                 return result_str
             elif server is None:

@@ -33,11 +33,14 @@ class ConflictDetector:
     treated as conflict-free (correct opt-in default).
     """
 
-    def check(self, candidate, running: list) -> list:
+    def check(self, candidate, running: list, live_resources: dict = None) -> list:
         """
         Check candidate task against all currently running tasks.
+        live_resources: orchestrator's _task_resources dict — task_id → {"reads": set, "writes": set}.
+        Merges live filesystem touches (registered during execution) with any static context declarations.
         Returns a list of Conflict objects (empty = no conflicts).
         """
+        live = live_resources or {}
         conflicts = []
         c_resources = set(candidate.context.get("resources", []))
         c_writes    = set(candidate.context.get("writes",    []))
@@ -45,8 +48,9 @@ class ConflictDetector:
 
         for active in running:
             a_resources = set(active.context.get("resources", []))
-            a_writes    = set(active.context.get("writes",    []))
-            a_reads     = set(active.context.get("reads",     []))
+            live_data   = live.get(active.id, {})
+            a_writes    = set(active.context.get("writes", [])) | live_data.get("writes", set())
+            a_reads     = set(active.context.get("reads",  [])) | live_data.get("reads",  set())
 
             # Physical: shared exclusive resource
             shared_resources = c_resources & a_resources

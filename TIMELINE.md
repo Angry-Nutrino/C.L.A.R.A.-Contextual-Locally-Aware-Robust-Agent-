@@ -1,5 +1,52 @@
 # CLARA Project Timeline
 
+## 2026-05-10
+
+[FEATURE] Per-turn read-modify-write conflict detection and write-lock exclusivity (ResourceLedger)
+Closes the mid-execution conflict gap left open by Layers 2+3: ConflictDetector only fires at
+dispatch time, so two tasks that touch the same file after both have started had no protection.
+New module: core_logic/resource_ledger.py — module-level ResourceLedger singleton with:
+  - record_read(task_id, path, content): hashes file content at read time, stores per task
+  - check_write(task_id, path): before any write_file, re-hashes the file on disk and compares
+    against the stored read hash. If changed → returns conflict error so Clara re-reads first.
+    If no prior read (pure write) → skips hash check, falls through to write lock.
+  - acquire_write(path, task_id): asyncio.Lock per path, held only for the write call duration.
+    Coroutine suspends cooperatively at await lock.acquire() if another task holds the write lock.
+  - release_task(task_id): cleans up all read hashes on task completion/failure (called from
+    orchestrator._run_worker finally alongside _task_resources cleanup).
+Integration: task_id threaded through orchestrator._handle_user_input (task.context["task_id"])
+→ process_request → _run_fast / run_task → _execute_fast_tool / execute_tool closure
+→ execute_fast / execute_deliberate in tool_executor.py (new task_id param on both functions).
+Both FAST and DELIBERATE paths now record reads and enforce writes through the ledger.
+Affected: core_logic/resource_ledger.py (new), core_logic/tool_executor.py, core_logic/agent.py,
+core_logic/orchestrator.py.
+
+## 2026-05-09
+
+[FEATURE] Active task awareness (Layer 2) + live resource ledger (Layer 3)
+Layer 2: orchestrator._run_worker now injects an [ACTIVE TASKS] block into task context before
+calling process_request for user tasks. process_request appends it to full_context, so both
+the Interpreter and the main LLM see what other tasks are currently running. Clara can reason
+cooperatively about overlapping work without any enforcement.
+Layer 3: orchestrator maintains _task_resources dict (task_id → {reads: set, writes: set}).
+_run_worker defines a _resource_callback closure that writes into this ledger. The callback
+is threaded through task_context → process_request → _run_fast / run_task → execute_tool closure.
+After each successful filesystem tool call (read_file, write_file, list_directory, start_search,
+create_directory, get_file_info), the path is extracted and registered. ConflictDetector.check()
+now accepts live_resources and merges the ledger into a_writes/a_reads for each active task,
+making the existing but previously-starved conflict detection machinery functional with ground-truth data.
+Ledger is cleaned up in _run_worker.finally. FAST escalation path also threads resource_callback.
+Affected: core_logic/orchestrator.py, core_logic/agent.py, core_logic/conflict.py.
+
+[REFACTOR] Reverted user task serialization (Layer 1) — concurrency restored
+The priority-0.95 serialization guard (Brief 25) was reverting user tasks to fully serial execution,
+preventing Layers 2 and 3 from ever activating in the user-user concurrent case. Removed:
+(1) running_user/task_priority logic in _handle_user_input — all user tasks now get priority=1.0
+(2) serialization guard in _dispatch_ready_tasks — no longer holds back user tasks on priority < 1.0
+Concurrent user tasks now dispatch immediately. Conflict resolution is handled solely by
+ConflictDetector + ArbitrationEngine using the live resource ledger (Layer 3).
+Affected: core_logic/orchestrator.py — _handle_user_input, _dispatch_ready_tasks.
+
 ## 2026-05-08
 
 [FEATURE] Per-query thought cards — Neural Stream restructured from flat log to grouped expandable cards
