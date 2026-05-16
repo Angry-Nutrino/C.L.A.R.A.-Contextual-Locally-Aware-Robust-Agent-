@@ -588,8 +588,6 @@ Fix G — Orchestrator system_trigger log spam:
 ## Known Issues
 
 - **RAG build incompatibility:** PyTorch/HuggingFace version mismatch causes "Cannot copy out of meta tensor" error at startup. Affects archive injection initialization but does not crash core functionality.
-- **Voice system:** STT ([ears.py](http://ears.py)) and TTS (kokoro_mouth.py) are thin wrappers. VoiceCoordinator not implemented.
-- **Architecture diagram:** PNG diagram from Mar 13 is outdated. Current system includes Tool Registry, MCP Client, Desktop Commander.
 
 ---
 
@@ -712,15 +710,7 @@ Fix G — Orchestrator system_trigger log spam:
 
 ---
 
-## Statistics
-
-- **Commits:** 25+ (from 2025-12-24 to 2026-04-24)
-- **Briefs:** 24 (Brief 0 through Brief 23, numbered consecutively)
----
-
 ## 2026-04-29
-
-[FIX] list_directory chunk-limit — root cause in system prompt examples (system_prompt.py, tool_executor.py)
 - Stress test Q18 root cause traced: `depth: 1` was not in DC's list_directory schema at all
   (schema only exposes `path`). CLARA learned it from the Rule 14 example in SYSTEM_PROMPT:
   `Action: [{"tool": "list_directory", "path": "...", "depth": 1}]` — model pattern-matched
@@ -755,8 +745,14 @@ Fix G — Orchestrator system_trigger log spam:
   search returns nothing, to check for typos or casing in the parent directory.
 - list_directory is no longer the first move for named file resolution.
 
+---
+
+## Statistics
+
+- **Commits:** 30+ (from 2025-12-24 to 2026-05-08)
+- **Briefs:** 26 implemented (Brief 0 through Brief 26)
 - **Native tools:** 6 (web_search, python_repl, date_time, vision_tool, consult_archive, query_task_status)
 - **MCP tools (Desktop Commander):** 26
-- **Total registry tools:** 32 (tool_search is injected to DELIBERATE, not registered)
-- **Lines of code:** \~12K Python, \~4K JavaScript/React
-- **Project duration:** \~5 months (Dec 2025 — Apr 2026)
+- **Total registry tools:** 32 (tool_search injected to DELIBERATE, not registered)
+- **Lines of code:** ~12K Python, ~4K JavaScript/React
+- **Project duration:** ~5 months (Dec 2025 — May 2026)

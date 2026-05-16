@@ -212,6 +212,39 @@ Threshold raised from 5 → 20 to reduce background noise.
 MiniLM (`all-MiniLM-L6-v2`) is kept ONLY for episodic embedding similarity in `get_smart_context`.
 It no longer has any routing role. Encodes on CUDA, stored CPU-side.
 
+### Self-Knowledge (memory.json → `self_knowledge`)
+Three categories stored under `self_knowledge`:
+- `architecture_facts` — things discovered through use that aren't in CLAUDE.md
+- `failure_patterns` — recurring failure modes CLARA has encountered
+- `recovery_methods` — successful recovery strategies for known failure classes
+
+Seeded with 8 entries from stress test analysis (bench_logger lock, two-phase start_search,
+api.py root location, CHAT no-tool limitation, RAG stale-doc pattern, list_directory empty
+recovery, chunk-limit recovery). Always injected as `[SELF KNOWLEDGE]` block in every context.
+
+**Auto-population (Phase B):** `memorize_episode()` consolidation prompt includes a
+`self_learning` extraction field. Only fires when CLARA made a mistake and corrected it,
+or discovered a new architectural fact. Explicitly excluded: routine successes, Alkama facts,
+things already in CLAUDE.md.
+
+`crud.py` function: `add_self_knowledge(category, key, detail)` — dedup-guarded write.
+
+### Filesystem Map (memory.json → `filesystem_map`)
+Hierarchical path tree: `drive → dir object → file null`. Injected as compact `[FILE SYSTEM MAP]`
+block on every query — CLARA sees the filesystem structure she has already explored.
+
+Seeded with all paths from `known_locations` plus actual `core_logic/` and project root files.
+
+**Auto-population:** After any successful MCP filesystem tool call (`read_file`, `write_file`,
+`list_directory`, `create_directory`, `get_more_search_results`), `_update_filesystem_map()`
+in `tool_executor.py` runs. Extracts paths from args (reliable) and attempts to parse
+`list_directory` results for children (JSON first, text fallback). Search results scanned by
+regex for Windows path patterns. All parsing is defensive — never raises, never disrupts execution.
+
+`crud.py` functions: `merge_filesystem_path(path)` (additive tree merge),
+`remove_filesystem_path(path)` (stale entry removal), `_serialize_filesystem_map()` (context
+injection serializer).
+
 ---
 
 ## Persona System
@@ -271,12 +304,30 @@ rebuild in background thread + hot-reload of the in-memory FAISS engine.
 
 Watched paths: `core_logic/`, `CLAUDE.md`, `briefs/ROADMAP.md`.
 
-### User Task Serialization (Brief 25)
-When a new `user_input` event arrives while a user-origin task is already in `running` state, the new task's priority is set to `0.95` (vs the default `1.0`). The dispatch loop skips it until the first task completes. Background tasks (origin=system) are unaffected and continue running in parallel. On the next tick after the running task completes, the 0.95 task dispatches normally. This ensures user responses arrive in conversational order.
-
 ### SIMPLE_TRIGGERS
 Known lightweight system tasks bypass the Interpreter and go directly to `run_background_task`.
 Unknown/complex system tasks go through the full Interpreter → Router → Execution pipeline.
+
+### Concurrent Task Resource Safety (Layers 2+3 + ResourceLedger)
+
+Three layers protect concurrent user tasks from filesystem conflicts:
+
+**Layer 2 — Active Task Awareness:** When a user task starts, `_run_worker` checks what other tasks are currently `running`/`active` and injects an `[ACTIVE TASKS]` block into `full_context`. The LLM sees what else is in-flight before it starts executing. Soft signal only — no enforcement.
+
+**Layer 3 — Live Resource Ledger (dispatch-time):** `_task_resources` dict on the orchestrator (`task_id → {"reads": set, "writes": set}`) is populated via `resource_callback` as tools execute. `ConflictDetector.check()` receives this at dispatch time so pending tasks see what running tasks are actually touching. Cleans up in `_run_worker` finally.
+
+**ResourceLedger — Mid-execution conflict detection** (`core_logic/resource_ledger.py`):
+Module-level singleton `resource_ledger` shared across all tasks. Two mechanisms:
+
+1. **Read-modify-write protection:** `record_read(task_id, path, content)` hashes file content after every successful `read_file`. Before every `write_file`, `check_write(task_id, path)` re-hashes the file on disk and compares. If changed → returns `"Error: Write blocked..."` to the ReAct loop so Clara re-reads first. Hash mismatch is caught before the lock is even attempted.
+
+2. **Pure-write exclusivity:** `acquire_write(path, task_id)` acquires an `asyncio.Lock` per path, held only for the duration of the `mcp_client.call`. A coroutine suspends cooperatively at `await lock.acquire()` if another task holds the lock — resumes automatically when released. Covers the edge case where two tasks write a file neither has read.
+
+`release_task(task_id)` cleans up all read hashes in `_run_worker` finally alongside `_task_resources`.
+
+**Threading:** `task.id` injected into `task.context["task_id"]` in `_handle_user_input` → extracted in `process_request` → passed to `_run_fast` / `run_task` → `execute_fast` / `execute_deliberate` in `tool_executor.py` (both accept `task_id=None`, ops are no-ops when None so background tasks are unaffected).
+
+**Latency impact:** Negligible. Hash check is one extra disk read at write time (<1ms for typical files). Uncontested lock acquire is nanoseconds.
 
 ### Retry Architecture
 `MAX_ATTEMPTS = 3`. On failure: summarize failure context, create new task with
