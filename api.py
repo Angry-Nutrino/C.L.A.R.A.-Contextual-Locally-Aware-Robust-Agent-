@@ -155,6 +155,24 @@ async def lifespan(app: FastAPI):
 
     # Startup
     slog.info("[API] Starting CLARA system...")
+
+    # ── BRIEF 62 — POLICY GATE ON BOOT. This must run BEFORE anything authority-bearing starts. ──
+    # Prints the effective security policy and the capability-manifest hash, then REFUSES TO START if
+    # any security-relevant field is absent or holds a value we do not recognise AND falling back to
+    # its default would give the system more authority.
+    #
+    # Why fail rather than warn: arming PYTHON_REPL_COMPUTE_ONLY on 2026-09-07 was a silent no-op
+    # because the module reading it never loaded the env file, and on 2026-09-09 an invalid value was
+    # measured to degrade silently toward permissive (ADMISSIBILITY_MODE=enforced -> "shadow";
+    # ADMISSIBILITY_FAIL=close -> fail-OPEN). Both leave the operator believing a control is armed when
+    # it is not. A backend that will not boot is loud; a control that is quietly off is not.
+    #
+    # 🔴 CONSEQUENCE, DELIBERATE AND ACCEPTED: a typo in one of those keys stops the backend, which
+    # means the unattended 08:02 drill cron produces no run and no report. That is the trade, and it is
+    # the one that was ratified. The exception message names the offending field.
+    from core_logic import policy_config as _policy_config
+    _policy_config.startup_check(strict=True)
+    slog.info("[API] Policy config validated. manifest=%s" % _policy_config.manifest_hash())
     _pid_file = os.path.join(os.path.dirname(__file__), "clara_backend.pid")
     try:
         with open(_pid_file, "w") as _f:

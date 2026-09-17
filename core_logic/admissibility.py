@@ -39,6 +39,24 @@ import hashlib
 import tempfile
 import threading
 from datetime import datetime, timezone
+from dotenv import load_dotenv
+
+# 2026-09-07: THIRD module found with the same control-activation defect (tools.py first, llm_config.py
+# second). This module read PARTNER_C_TIER_MIN at import time and never loaded the env file at all, so
+# whether the override resolved depended entirely on whether some other module had already loaded
+# core_logic/.env earlier in the import graph. A security-relevant value whose activation depends on
+# import order has an unstable trust boundary. Load by explicit path so the read is self-sufficient.
+# The proper fix is a validated bootstrap config object, not three patches: see briefs/.
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
+# BRIEF 62, 2026-09-09: the single owner of security-relevant config. Importing it also performs THE
+# load of core_logic/.env by explicit path, which is what makes these reads correct regardless of
+# import order. Dual import because this module is also executed directly for its self-test.
+try:
+    from . import policy_config as _policy
+except ImportError:
+    import policy_config as _policy
+
 
 _LEDGER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admissibility_ledger.json")
 _POLICY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admissibility_policy.json")
@@ -252,17 +270,22 @@ def _risk_fields(tool_name: str, local_ctx: dict) -> dict:
     }
 
 
+# These three used to read os.environ directly and SILENTLY fall back to the permissive option on any
+# value they did not recognise: ADMISSIBILITY_MODE=enforced resolved to "shadow", ADMISSIBILITY_FAIL=
+# close resolved to fail-OPEN. One letter and the control is disarmed, with no error and no log line.
+# They now resolve through policy_config, which RECORDS the fault so startup_check() can refuse to
+# boot on it. The per-call read is kept on purpose: freezing would break the self-test at the bottom
+# of this file, and the defect was the SILENCE, not the re-read.
 def gate_enabled() -> bool:
-    return os.getenv("ADMISSIBILITY_GATE", "").strip().lower() in ("on", "1", "true", "yes")
+    return _policy.resolve("ADMISSIBILITY_GATE") == "on"
 
 
 def gate_mode() -> str:
-    m = os.getenv("ADMISSIBILITY_MODE", "shadow").strip().lower()
-    return m if m in ("shadow", "enforce") else "shadow"
+    return _policy.resolve("ADMISSIBILITY_MODE")
 
 
 def _fail_open() -> bool:
-    return os.getenv("ADMISSIBILITY_FAIL", "open").strip().lower() != "closed"
+    return _policy.resolve("ADMISSIBILITY_FAIL") != "closed"
 
 
 def is_mutating(tool_name: str) -> bool:
@@ -645,7 +668,9 @@ def _partner_b_evaluate(envelope, local_ctx):
 # find. Rather than invent a string and put it on the wire, T_MIN currently ALIASES the confirmed
 # reversible tier, so nothing unconfirmed is ever transmitted. `PARTNER_C_TIER_MIN` overrides it the
 # moment they name it, and the scale below is already ordered to accept it.
-_CEILING_T_MIN = os.getenv("PARTNER_C_TIER_MIN", "reversible-bounded").strip()
+# 2026-09-13 (G44): resolved through policy_config, the single owner. PARTNER_C_TIER_MIN is
+# open_valued, so this is behaviour-identical to the os.getenv it replaces and adds fault recording.
+_CEILING_T_MIN = _policy.resolve("PARTNER_C_TIER_MIN")
 _CEILING_REVERSIBLE = "reversible-bounded"
 _CEILING_IRREVERSIBLE = "irreversible-requires-authorization"
 

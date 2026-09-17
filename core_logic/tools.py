@@ -9,7 +9,11 @@ from .session_logger import slog
 import os
 import re
 
-load_dotenv()  # Load once at module level
+# Explicit path, not a bare load_dotenv(). agent.py:9 imports this module ~174 lines BEFORE its own
+# load_dotenv at agent.py:183, and a bare call resolves nothing from the repo root (find_dotenv() -> '').
+# So every module-level os.getenv below — _COMPUTE_ONLY among them — read the DEFAULT, and setting the
+# flag in core_logic/.env silently did nothing. Found 2026-09-07 while arming PYTHON_REPL_COMPUTE_ONLY.
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 
 RAG_ENGINE= None
@@ -134,7 +138,16 @@ def get_archive_context(q_emb_cpu, query: str, threshold: float = 0.35) -> str:
 # though Rule 17 already tells her not to. So while the flag is off this still LOGS what it would
 # have blocked, and that shadow signal is what should decide the flip. Same doctrine as the gate
 # itself: measure before arming.
-_COMPUTE_ONLY = os.getenv("PYTHON_REPL_COMPUTE_ONLY", "0").strip().lower() in ("1", "true", "yes", "on")
+# BRIEF 62, 2026-09-09: the single owner of security-relevant config. Importing it also performs THE
+# load of core_logic/.env by explicit path, which is what makes these reads correct regardless of
+# import order. Dual import because this module is also executed directly for its self-test.
+try:
+    from . import policy_config as _policy
+except ImportError:
+    import policy_config as _policy
+# Resolved through policy_config so an unrecognised value is a recorded fault instead of a silent
+# fall back to OFF.
+_COMPUTE_ONLY = _policy.resolve("PYTHON_REPL_COMPUTE_ONLY") == "on"
 
 # Pure-computation modules. Anything that can touch the filesystem, spawn a process, open a
 # socket, or import arbitrary code is absent by construction rather than blacklisted, so a module

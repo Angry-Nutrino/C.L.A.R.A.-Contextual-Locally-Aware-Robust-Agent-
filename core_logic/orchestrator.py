@@ -731,7 +731,10 @@ class Orchestrator:
             self._active_workers.pop(task.id, None)
             self._task_resources.pop(task.id, None)   # clean up Layer 3 ledger
             from .resource_ledger import resource_ledger as _rl
-            _rl.release_task(task.id)                  # clean up read hashes + write locks
+            _rl.release_task(task.id)                  # read hashes ONLY. Write locks are released by the
+                                                       # caller's own try/finally, per acquire_write's
+                                                       # docstring — release_task does not touch them.
+                                                       # (comment corrected 2026-08-24: it claimed both)
 
     # ── Brief 35: task-level persistence (detached retry + proactive delivery) ──────────
     async def _spawn_detached_retry(self, orig_task, orig_ctx: dict, reason: str, partial: str) -> None:
