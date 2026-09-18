@@ -850,9 +850,22 @@ _ADAPTERS = {"noop": _noop_evaluate, "policy": _policy_evaluate, "partner_a": _p
 # on a round-trip. Kept as a mutable set so the self-test can register a fake remote adapter.
 _REMOTE_ADAPTERS = {"partner_a", "partner_b", "partner_c"}
 
+# ── BRIEF_63, closed 2026-09-18 with option B ────────────────────────────────────────────────────
+# `_ADAPTERS` is mutable: the self-test registers adapters into it at run time, and so could any
+# future caller. So policy_config cannot canonicalise this key against a static list without
+# rejecting a perfectly valid adapter, and its fallback is `noop`, which always returns ALLOW.
+# A silently-rejected adapter name therefore DISABLES THE GATE, which is the failure BRIEF_62 exists
+# to prevent. Rather than open-value the field and lose the capability model (option A), the owning
+# module hands policy_config a reader for the live registry. The coupling is one-way: policy_config
+# still imports nothing from here.
+_policy.register_values_fn("ADMISSIBILITY_ADAPTER", lambda: set(_ADAPTERS))
+
 
 def _adapter():
-    name = os.getenv("ADMISSIBILITY_ADAPTER", "noop").strip().lower()
+    """Resolve the configured adapter THROUGH policy_config, so an unrecognised name is recorded as
+    a fault instead of silently degrading to noop. G44 flagged the old `os.getenv` here as the last
+    direct environment read among the governed keys; this is what closed it."""
+    name = _policy.resolve("ADMISSIBILITY_ADAPTER")
     return name if name in _ADAPTERS else "noop", _ADAPTERS.get(name, _noop_evaluate)
 
 

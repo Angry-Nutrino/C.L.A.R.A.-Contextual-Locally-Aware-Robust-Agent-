@@ -149,6 +149,18 @@ except ImportError:
 # fall back to OFF.
 _COMPUTE_ONLY = _policy.resolve("PYTHON_REPL_COMPUTE_ONLY") == "on"
 
+# ── G38 / BRIEF_60 — OS-ENFORCED ISOLATION (added 2026-09-18). DORMANT: default "off". ──
+# `_COMPUTE_ONLY` above rebuilds the exec namespace. That is useful and it is NOT a boundary, which
+# BRIEF_60 section 5.2 retracted in writing and tests/test_compute_only_containment.py re-measures
+# every run: the real open() stays reachable through __subclasses__(). This flag runs the code in a
+# separate process under a Windows restricted token instead, so the escape can succeed and the
+# kernel refuses the write anyway. Measured 2026-09-18: gadget reaches open(), write -> PermissionError.
+#   off    - in-process, unchanged
+#   shadow - in-process result is returned, the sandbox ALSO runs, divergence is logged. Costs a
+#            process spawn per call; that is the price of deciding the flip on evidence.
+#   on     - sandbox only
+_ISOLATION = _policy.resolve("PYTHON_REPL_ISOLATION")
+
 # Pure-computation modules. Anything that can touch the filesystem, spawn a process, open a
 # socket, or import arbitrary code is absent by construction rather than blacklisted, so a module
 # nobody thought of is denied rather than allowed.
@@ -214,12 +226,60 @@ def _would_compute_only_block(code: str) -> str:
                 "urllib", "http", "multiprocessing", "threading", "signal", "platform"):
         if re.search(rf"\b(?:import\s+{mod}\b|from\s+{mod}[\s.])", code):
             hits.append(f"import:{mod}")
-    if re.search(r"\bopen\s*\(", code):
-        hits.append("open()")
+    # 🔴 READ vs WRITE, added 2026-09-18. The old line recorded only that open() appeared.
+    # Reviewing 206 logged calls on 09-18: 164 (79.6%) reached for the filesystem and open() alone
+    # appeared 131 times, and NOT ONE of those records told us whether it was a read or a write.
+    # That matters because compute-only blocks BOTH and the OS sandbox blocks only WRITES, so the
+    # accumulated shadow data could only bracket the answer (0 to 164) instead of giving it.
+    # Recording the mode turns the next day of real traffic into the actual number.
+    for m in re.finditer(r"\bopen\s*\(([^)]*)\)", code):
+        args = m.group(1)
+        mode = re.search(r"""['"]([rwaxb+t]{1,4})['"]""", args)
+        mode = mode.group(1) if mode else "r"        # open() defaults to read
+        hits.append("open:w" if any(c in mode for c in "wax+") else "open:r")
+    if "open:w" not in hits and "open:r" not in hits and re.search(r"\bopen\s*\(", code):
+        hits.append("open:?")                        # multi-line call the single-line regex missed
     for b in ("exec", "eval", "compile", "__import__"):
         if re.search(rf"\b{b}\s*\(", code):
             hits.append(f"builtin:{b}")
     return ",".join(sorted(set(hits)))
+
+
+def _isolated_result_to_output(r: dict) -> str:
+    """Flatten a sandbox result into the single string the tool contract returns."""
+    if r.get("timed_out"):
+        return "Error: %s" % r.get("error", "timed out")
+    if r.get("kind") == "sandbox":
+        # The boundary itself failed. Say so as a sandbox fault rather than letting it read as a
+        # failure of the user's code, which would send the model off rewriting correct code.
+        return "Error: %s" % r.get("error", "sandbox failure")
+    out = r.get("output") or ""
+    if r.get("error"):
+        return (out + ("\n" if out and not out.endswith("\n") else "") +
+                "Error: %s" % r["error"]).strip()
+    if not out.strip():
+        return "Code executed successfully with no output. Check your format and checkcode for return values."
+    return out
+
+
+def _run_isolated(code: str):
+    """Run in the restricted-token sandbox. Returns the output string, or None if the boundary
+    could not be established. None is never silently converted into a pass: the caller logs a
+    DOWNGRADE, because a sandbox that failed to start is not a sandbox that allowed the action."""
+    try:
+        try:
+            from . import repl_sandbox as _sbx
+        except ImportError:
+            import repl_sandbox as _sbx
+        r = _sbx.run(code)
+        slog.info("   [ReplIsolation] ran in sandbox exit=%s timed_out=%s kind=%s"
+                  % (r.get("exit_code"), r.get("timed_out"), r.get("kind") or "ok"))
+        return _isolated_result_to_output(r)
+    except Exception as e:
+        slog.info("   [ReplIsolation] ⚠️ DOWNGRADE - sandbox unavailable (%s: %s). "
+                  "Execution fell back IN-PROCESS and this call had no OS boundary."
+                  % (type(e).__name__, e))
+        return None
 
 
 def run_python_code(code: str, use_case: str = "read") -> str:
@@ -252,6 +312,16 @@ def run_python_code(code: str, use_case: str = "read") -> str:
                       f"(flag={'ON' if _COMPUTE_ONLY else 'OFF'})")
     except Exception as _e:                      # observation must never break execution
         slog.info(f"   [CodeIntent] derive failed (non-fatal): {type(_e).__name__}: {_e}")
+
+    # ── G38 — OS-ENFORCED ISOLATION. The only branch here that changes execution. ──
+    if _ISOLATION == "on":
+        _iso = _run_isolated(code)
+        if _iso is not None:
+            return _iso
+        # Falling through means the boundary could not be established. _run_isolated has already
+        # logged it as a DOWNGRADE. Continuing in-process is the deliberate choice: this flag is
+        # about closing an unrecorded write path, not about refusing to work when pywin32 is
+        # missing. The log line is what makes the downgrade auditable instead of invisible.
 
     # Output capture is SCOPED via a print-override in the exec namespace — the old
     # implementation swapped the process-global sys.stdout, so two concurrent
@@ -298,6 +368,32 @@ def run_python_code(code: str, use_case: str = "read") -> str:
         output = f"Error: {e}"
     except Exception as e:
         output = f"Error: {str(e)}"
+
+    # ── SHADOW: run the sandbox too, return the in-process answer, log where they disagree. ──
+    # This is the evidence that should decide the flip, and it is the same doctrine used for the
+    # gate and for compute-only: measure on real traffic before arming. It costs a process spawn
+    # per call, which is why it is a mode and not the default.
+    if _ISOLATION == "shadow":
+        try:
+            _iso = _run_isolated(code)
+            if _iso is None:
+                slog.info("   [ReplIsolation] shadow: sandbox unavailable, nothing compared")
+            else:
+                _a, _b = (output or "").strip(), _iso.strip()
+                if _a == _b:
+                    slog.info("   [ReplIsolation] shadow: AGREE")
+                else:
+                    # The interesting case, and the one worth reading: in-process succeeded and the
+                    # sandbox refused. That is a real mutation this tool is performing today with
+                    # no envelope and no ledger row.
+                    _refused = "PermissionError" in _b and "PermissionError" not in _a
+                    slog.info("   [ReplIsolation] shadow: DIVERGE%s\n"
+                              "        in-process: %s\n"
+                              "        sandboxed : %s"
+                              % ("  ⚠️ SANDBOX REFUSED WHAT IN-PROCESS ALLOWED" if _refused else "",
+                                 _a[:300], _b[:300]))
+        except Exception as _e:                  # observation must never break execution
+            slog.info(f"   [ReplIsolation] shadow compare failed (non-fatal): {type(_e).__name__}: {_e}")
 
     return output
 

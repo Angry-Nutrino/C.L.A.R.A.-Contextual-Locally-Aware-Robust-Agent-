@@ -161,3 +161,8 @@ CLARA_Brief_v*_TEXT_CHANGES.md
 CLARA_Brief_v*_TEXTONLY_BROKEN*.pdf
 CLARA_diagram_extracted_*.png
 COMMIT_MSG_*.txt
+
+# Delivery artifacts for the fixture: byte-identical copies made for a channel that
+# rejects .py. They would drift from the source the moment fixture.py changes, and the
+# manifest hash verifies against fixture.py directly, so the repo keeps the source only.
+authority_substitution_fixture/frozen_*/

@@ -76,6 +76,14 @@ CAP_UNADJUDICATED = "action.without_verdict"   # may act with no binding verdict
 STRENGTH = {
     "namespace": ("language-level namespace reconstruction, same process", "behavioural"),
     "branch": ("an if-statement in the gate", "behavioural"),
+    # Added 2026-09-18 with PYTHON_REPL_ISOLATION. The FIRST non-behavioural primitive here, and
+    # the scope is written into the label on purpose. A Windows restricted token denies the
+    # filesystem write in the kernel, so a language-level escape that reaches the real open() is
+    # refused anyway (measured: the escape succeeds, the write returns PermissionError). It denies
+    # WRITES ONLY. Reads, network egress and process creation were all measured as still working,
+    # which is why the field's capability set keeps CAP_PROC and CAP_NET.
+    "process": ("a Windows restricted token on a separate process",
+                "os-enforced (filesystem writes only)"),
     "none": ("nothing; this value is descriptive only", "none"),
 }
 
@@ -87,7 +95,8 @@ class Field(object):
     The authority direction of the fallback is derived from these sets, never declared.
     """
 
-    def __init__(self, name, default, caps, enforced_by, note, aliases=None, open_valued=False):
+    def __init__(self, name, default, caps, enforced_by, note, aliases=None, open_valued=False,
+                 values_fn=None, unknown_caps=None):
         self.name = name
         self.default = default
         self.caps = {k: frozenset(v) for k, v in caps.items()}
@@ -95,6 +104,44 @@ class Field(object):
         self.note = note
         self.aliases = aliases or {}          # raw value -> canonical value
         self.open_valued = open_valued        # free-form string, cannot be enumerated
+
+        # ── BRIEF_63 option B, implemented 2026-09-18 ────────────────────────────────────────
+        # Some fields have a legal value set that is only known at RUN time. ADMISSIBILITY_ADAPTER
+        # is the case: adapters register themselves into a live registry, so a static list here is
+        # wrong the moment anyone adds one, and canonicalising against the static list rejects a
+        # perfectly valid adapter and silently falls back to the default. The default is `noop`,
+        # and noop always returns ALLOW, so that fallback DISABLES ADJUDICATION ENTIRELY. That is
+        # the exact silence BRIEF_62 was written to end, which is why option A (open-valuing the
+        # field and throwing the capability model away) was rejected in favour of this.
+        #
+        # `values_fn` is a callback the OWNING MODULE registers, so policy_config still knows
+        # nothing about its callers at import time. Until it is registered the static list applies,
+        # which is the correct conservative behaviour during early startup.
+        self.values_fn = values_fn
+
+        # Capabilities for a value that only exists at run time cannot be declared in advance, so
+        # they are ASSUMED, and the assumption is the pessimistic one: an adapter we know nothing
+        # about might not adjudicate at all. Anything else would let a dynamically registered
+        # adapter quietly look safer than the one it replaced.
+        self.unknown_caps = frozenset(unknown_caps or ())
+
+    # -- the live legal value set ----------------------------------------------------------------
+    def legal_values(self):
+        """Every value this field accepts right now: the declared ones plus any registered live."""
+        vals = set(self.caps)
+        if self.values_fn is not None:
+            try:
+                vals |= {str(v).strip().lower() for v in self.values_fn() if str(v).strip()}
+            except Exception:
+                pass          # a broken callback must never make a governed field unreadable
+        return vals
+
+    def caps_for(self, value):
+        """Capabilities held at `value`. Declared values use the table; a value that exists only in
+        the live registry gets the pessimistic assumption above."""
+        if value in self.caps:
+            return self.caps[value]
+        return self.unknown_caps
 
     # -- normalisation ---------------------------------------------------------------------------
     def canon(self, raw):
@@ -105,7 +152,7 @@ class Field(object):
         v = self.aliases.get(v, v)
         if self.open_valued:
             return raw.strip() or None
-        return v if v in self.caps else None
+        return v if v in self.legal_values() else None
 
     # -- the derived authority direction ---------------------------------------------------------
     def fallback_grants_authority(self):
@@ -134,6 +181,20 @@ FIELDS = (
         aliases=_BOOL_ALIASES,
     ),
     Field(
+        # G38 / BRIEF_60, added 2026-09-18. The OS-enforced sibling of PYTHON_REPL_COMPUTE_ONLY.
+        # The capability sets are written from MEASUREMENT, not from intent: the sandbox was probed
+        # on 2026-09-18 and filesystem writes were refused (PermissionError) while process creation
+        # and network egress both still SUCCEEDED. So `on` drops CAP_FS_WRITE and keeps the other
+        # two. Writing () here would overclaim the boundary in the one file that is supposed to be
+        # the honest record of what each value actually grants.
+        "PYTHON_REPL_ISOLATION", "off",
+        {"on": (CAP_PROC, CAP_NET),
+         "shadow": (CAP_FS_WRITE, CAP_PROC, CAP_NET),
+         "off": (CAP_FS_WRITE, CAP_PROC, CAP_NET)},
+        "process",
+        "off and shadow both execute in-process, where a namespace escape reaches the real open()",
+    ),
+    Field(
         "ADMISSIBILITY_GATE", "off",
         {"on": (), "off": (CAP_UNADJUDICATED,)},
         "branch",
@@ -153,10 +214,17 @@ FIELDS = (
         "open lets an action proceed when the adjudicator itself is broken",
     ),
     Field(
+        # BRIEF_63, resolved 2026-09-18 with option B. This is the one field whose legal values are
+        # only fully known at run time: adapters register into a live registry, so a static list
+        # here rejects a valid adapter and falls back to `noop`, and `noop` always returns ALLOW.
+        # `admissibility.py` calls register_values_fn() at import to hand over the live set.
         "ADMISSIBILITY_ADAPTER", "noop",
         {"noop": (CAP_UNADJUDICATED,), "policy": (), "partner_a": (), "partner_b": (), "partner_c": ()},
         "branch",
         "noop always returns ALLOW, so the gate evaluates nothing",
+        # An adapter registered at run time carries no declared capability set, so it is assumed to
+        # be the permissive case. An unknown adapter must never look safer than a declared one.
+        unknown_caps=(CAP_UNADJUDICATED,),
     ),
     Field(
         "PARTNER_C_TIER_MIN", "reversible-bounded", {}, "none",
@@ -171,6 +239,16 @@ FIELDS = (
 )
 
 BY_NAME = {f.name: f for f in FIELDS}
+
+
+def register_values_fn(name, fn):
+    """Let the module that OWNS a dynamic registry tell policy_config how to read it.
+
+    BRIEF_63 option B. The coupling runs one way only: the owner calls in, and this module still
+    imports nothing from its callers. Called once at import time by the owning module; before that
+    call the static list applies, which is the conservative behaviour during early startup.
+    """
+    BY_NAME[name].values_fn = fn
 
 # Faults observed during resolution. Populated by resolve(); read by startup_check() and emit().
 _FAULTS = []
@@ -215,7 +293,9 @@ def capabilities(values=None):
     values = values or snapshot()["values"]
     held = set()
     for f in FIELDS:
-        held |= f.caps.get(values.get(f.name), frozenset())
+        # caps_for, not caps.get: a value that exists only in the live registry must still
+        # contribute its (pessimistic) capability set instead of contributing nothing.
+        held |= f.caps_for(values.get(f.name))
     return sorted(held)
 
 
