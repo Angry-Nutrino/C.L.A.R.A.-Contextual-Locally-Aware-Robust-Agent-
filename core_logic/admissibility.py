@@ -69,6 +69,13 @@ ALLOW, REVIEW, DENY = "ALLOW", "REVIEW", "DENY"
 MUTATING_TOOLS = frozenset({
     "write_file", "create_directory", "move_file", "edit_block",
     "start_process", "interact_with_process", "kill_process", "force_terminate",
+    # AEC-007 REMEDIATION, 2026-09-23. A general-purpose interpreter executes arbitrary code, so it
+    # can reach every effect the eight names above can. It was absent from this set, which meant
+    # gate() returned before building an envelope and the action produced no verdict and no receipt.
+    # Disclosed to the external reviewer 2026-08-17, before the blind exchange rather than after it.
+    # Gating unconditionally on the TOOL, never on a classifier's reading of the code: a classifier
+    # miss would reopen exactly this hole one level down.
+    "python_repl", "run_python_code",
 })
 _MUTATING_HINTS = ("write", "create", "move", "delete", "remove", "kill", "terminate", "edit_")
 
@@ -77,6 +84,7 @@ _INTENTS = {
     "create_directory": "create_directory", "move_file": "move_or_rename",
     "start_process": "execute_process", "interact_with_process": "execute_process",
     "kill_process": "terminate_process", "force_terminate": "terminate_process",
+    "python_repl": "execute_code", "run_python_code": "execute_code",   # AEC-007, 2026-09-23
 }
 
 # CLARA's mutating tools -> partner A's action taxonomy (its catalog is DevOps/generic). File ops map to
@@ -87,6 +95,7 @@ _PARTNER_A_ACTION = {
     "create_directory": "write_file", "move_file": "write_file",
     "start_process": "run_model", "interact_with_process": "run_model",
     "kill_process": "shutdown", "force_terminate": "shutdown",
+    "python_repl": "run_model", "run_python_code": "run_model",         # AEC-007, 2026-09-23
 }
 
 # ── Risk metadata (the partner's schema, 2026-07-16): target_class / operation_class / risk_class ─────
@@ -98,6 +107,7 @@ _OP_CLASS = {  # the partner's enum: read | write | modify | delete | execute
     "write_file": "write", "create_directory": "write",
     "edit_block": "modify", "move_file": "modify",
     "start_process": "execute", "interact_with_process": "execute",
+    "python_repl": "execute", "run_python_code": "execute",  # AEC-007, 2026-09-23
     "kill_process": "delete", "force_terminate": "delete",   # ending a process = removing it
     # READ-class tools (added 2026-08-14). These are NOT in MUTATING_TOOLS, so the gate
     # short-circuits before classification and no verdict depends on them. They are mapped anyway
@@ -221,8 +231,18 @@ def _risk_class(tool: str, target_class: str, raw: str) -> str:
     c = (raw or "").lower()
     if tool in ("kill_process", "force_terminate"):
         return "high"
-    if tool in ("start_process", "interact_with_process"):
+    if tool in ("start_process", "interact_with_process", "python_repl", "run_python_code"):
         if any(h in c for h in _DESTRUCTIVE_HINTS):
+            # AEC-007, 2026-09-23, SECOND PASS. "high" sits BELOW the shell->critical mapping further
+            # down, and _classify_process_target puts essentially all interpreter payloads in shell. So
+            # for the interpreter this branch could only ever DEMOTE: `2+2` measured critical while
+            # `os.system("rm -rf /data")` measured high. Take the higher of the two for the interpreter.
+            # The two process tools keep the 2026-08-13 partner-agreed behaviour, untouched: there the
+            # branch PROMOTES, because a destructive command often classifies dev_tool and rates low.
+            # Note this is severity resolution only. Their verdict rule maps high AND critical to
+            # REVIEW, so no verdict was ever changed by the inversion (see the note at line 247).
+            if tool in ("python_repl", "run_python_code") and target_class == "shell":
+                return "critical"
             return "high"
         # Supply-chain: a package install executes remote third-party code. Checked BEFORE the
         # dev_tool mapping, which would otherwise rate it low (partner A taxonomy, 2026-08-06).
@@ -259,7 +279,8 @@ def _risk_class(tool: str, target_class: str, raw: str) -> str:
 def _risk_fields(tool_name: str, local_ctx: dict) -> dict:
     """The three partner-schema fields, computed from local context that never leaves the machine."""
     raw = str((local_ctx or {}).get("path") or (local_ctx or {}).get("command") or "")
-    if tool_name in ("start_process", "interact_with_process", "kill_process", "force_terminate"):
+    if tool_name in ("start_process", "interact_with_process", "kill_process", "force_terminate",
+                     "python_repl", "run_python_code"):   # AEC-007, 2026-09-23
         tclass = _classify_process_target(raw)
     else:
         tclass = _classify_file_target(raw)
@@ -384,6 +405,12 @@ def build_envelope(tool_name: str, args: dict, task_id=None) -> dict:
     """The ABSTRACT governance envelope — metadata only, never content (see PRIVACY FLOOR)."""
     args = args if isinstance(args, dict) else {}
     path = str(args.get("path") or args.get("source") or args.get("command") or "")
+    # AEC-007, 2026-09-23. The interpreter's payload arrives as `code`, which was in none of the
+    # lookups above, so the risk and irreversibility scans below ran against an EMPTY string and
+    # `shutil.rmtree(...)` classified as reversible. `path` still drives the path-derived fields, so
+    # target_path_hash keeps meaning "hash of a path" and is left empty for code. `raw` is what the
+    # classifiers read. The code itself never enters the envelope: the privacy floor is unchanged.
+    raw = path or str(args.get("code") or "")
     basename = os.path.basename(path.rstrip("\\/")) if path else ""
     arg_summary = {k: f"<{type(v).__name__}:{len(str(v))}ch>" for k, v in args.items()}
     envelope = {
@@ -410,13 +437,13 @@ def build_envelope(tool_name: str, args: dict, task_id=None) -> dict:
     # partner-schema risk metadata (2026-07-16): coarse classes computed from the raw path/command
     # HERE, locally — only the labels enter the envelope. This is what lets a remote engine tell a
     # sandbox note-write from a system write without ever seeing a path.
-    envelope.update(_risk_fields(tool_name, {"path": path, "command": path}))
+    envelope.update(_risk_fields(tool_name, {"path": path, "command": raw}))
     # Irreversibility as a first-class envelope field (G21, 2026-07-22). Computed from COMMAND
     # SEMANTICS, not just the tool name: a destructive delete or `git reset --hard` run through
     # start_process is genuinely irreversible but was previously flagged only for kill-class tools —
     # the partner B run #1 showed the engine reaches hard-DENY via this signal, so under-marking it
     # sent destructive commands mislabeled as reversible. Coarse boolean only; the raw string stays local.
-    envelope["irreversible"] = _is_irreversible(tool_name, envelope["operation_class"], path)
+    envelope["irreversible"] = _is_irreversible(tool_name, envelope["operation_class"], raw)
     # Sign LAST, so the signature covers every other field including the risk metadata and the
     # irreversible flag. Signing earlier would leave exactly the governance-relevant fields unbound.
     _apply_signature(envelope)
