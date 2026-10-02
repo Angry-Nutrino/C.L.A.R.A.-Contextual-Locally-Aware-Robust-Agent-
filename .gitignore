@@ -166,3 +166,19 @@ COMMIT_MSG_*.txt
 # rejects .py. They would drift from the source the moment fixture.py changes, and the
 # manifest hash verifies against fixture.py directly, so the repo keeps the source only.
 authority_substitution_fixture/frozen_*/
+
+# BRIEF_65 retention archive. Everything moved here came from a gitignored zone and must stay
+# gitignored. WITHOUT this rule it depends on luck: reports/, traces/, My_Schedule/ and
+# busy-mode-reports/ are unanchored patterns that happen to match at any depth, but benchmarks/
+# and logs/ are NOT, so archiving an aged benchmark would have put it in a PUBLIC repo as a
+# tracked file. Measured before the first --apply, while only reports/ had anything old enough.
+_archive/
+
+# Credential-shaped filenames that escape the `.env*` and `*.bak.*` rules. Probed 2026-09-18:
+# `.env.old`, `.env.backup`, `.env.save`, `.env.2026-09-18` and `.env copy` are all already covered,
+# but a dot-less dump like `env.txt` was NOT. That is a plausible way to hand someone your keys.
+env.txt
+env.bak
+envs.txt
+secrets.txt
+*.env.txt

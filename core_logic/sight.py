@@ -1,3 +1,13 @@
+# ⚠️ THE MODEL THIS FILE LOADS NO LONGER EXISTS. `core_logic/moondream_brain/` (3.68 GB) was deleted
+# on 2026-09-18. Vision moved Moondream2 -> Grok -> Gemini 2.5 Flash and has run on Gemini since
+# 2026-06-11; the live tool is `analyze_image_grok` in tools.py. Nothing imports this module, which
+# is why the weights were removable at all, and `analyze_image` already returns a clean "Model
+# folder not found" instead of raising (see the os.path.exists guard below).
+#
+# The file is KEPT ON PURPOSE. It is the subject of a live evening drill question (a cross-source
+# absence check that asks Clara to verify CLAUDE.md's claim that nothing imports sight), so deleting
+# it would silently break a Rule-19 honesty test to save 4 KB. Retire the question first, then this.
+
 import sys
 import os
 

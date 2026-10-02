@@ -1124,11 +1124,25 @@ To add a new permanent document: drop it into `core_logic/docs/` and restart (or
 auto-rebuild if the file lands in a watched path).
 
 ### Files That Are Dead / Legacy
-- `core_logic/sight.py` — Moondream2 vision, no longer imported (vision later moved to Grok, then to a Gemini stub that is currently keyless/non-functional)
+- `core_logic/sight.py`: Moondream2 vision, no longer imported. Vision later moved to Grok, then to Gemini 2.5 Flash, which has been **LIVE since 2026-06-11**; the older "keyless/non-functional stub" wording here contradicted the Vision Tool section above and was corrected 2026-09-18. **Its model weights, `core_logic/moondream_brain/` (3.68 GB, 74 files), were DELETED 2026-09-18**, reachable only through this file, which nothing imports. `sight.py` itself is kept deliberately: it is the subject of a live evening drill question, so deleting it would break a Rule-19 absence check to save 4 KB.
 - `core_logic/tool_descriptions.json` — was MiniLM embedding source, Interpreter replaced this role
 - `core_logic/ears.py` — superseded by `core_logic/voice.py`, no longer imported
 - `core_logic/kokoro_mouth.py` — superseded by `core_logic/voice.py`, no longer imported
 - Architecture PNG (`Clara_Architecture_Fixed_And_Updated.png`) — outdated, does not reflect current system
+
+**REMOVED 2026-09-18 (BRIEF_65 cleanup). Listed so the record says what left and why. All three are
+recoverable from git history:**
+- `cleanup_tasks.py` and `cleanup_orphaned_tasks.py`: one-off SQLite surgery that marked pending
+  tasks invalidated. **Superseded by live automation:** `TaskGraph.prune_terminal(days=7)`
+  ([task_graph.py:364](core_logic/task_graph.py#L364)) is called by the janitor sweep in
+  [background_tasks.py:196](core_logic/background_tasks.py#L196). Recover: `git show 4d2d200:cleanup_tasks.py`
+- `update_diagram.py`: a one-off editor for the architecture diagram JSON, carrying a hardcoded
+  userId and timestamp, targeting the PNG listed as outdated directly above it.
+  Recover: `git show 22cfb91:update_diagram.py`
+
+⚠️ **Some load-bearing tooling lives outside the tracked tree.** It runs from `.git/hooks/pre-commit`
+or from standing instructions outside this repo, so nothing in the tree imports it and a static
+reachability pass will read it as dead. Never nominate it for deletion from such a pass.
 
 ### Branch
 All work on `autonomous`. (`features/stream-and-functionality` was the old dev branch — closed long ago; do not reference it.) Never merge to `main` until the full system is validated.
