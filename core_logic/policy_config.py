@@ -299,12 +299,46 @@ def capabilities(values=None):
     return sorted(held)
 
 
+# ── Code coverage of the manifest ────────────────────────────────────────────────────────────────
+# The capability sets describe INTENDED authority. Whether a proposed action is classified and gated
+# at all is decided by code, and a hash that only sees configuration cannot tell two classifiers
+# apart. `policy_version` has exactly that blind spot: it hashes the policy JSON, so commit 7793c6f
+# changed the classifier's admission set and left it unchanged. Until 2026-10-02 this manifest had the
+# same one. It now carries the canonical content hash of each file below, so changing any of them
+# changes the manifest hash.
+#
+# Canonical means CRLF folded to LF before hashing. That is the form git stores, so the value
+# reproduces on any platform with `git show <commit>:core_logic/<file> | sha256sum`. The raw bytes of a
+# Windows working copy hash differently for identical code.
+#
+# COVERED: only the files listed. Everything else is NOT covered, including tool_executor.py, whose
+# dispatch decides which calls reach the gate in the first place, and the resolution logic in this
+# module outside the compiled capability sets.
+CODE_COVERED = ("admissibility.py",)
+
+
+def _canonical_sha256(path):
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return "unreadable"
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+
+
+def code_hashes():
+    """Canonical sha256 of each covered source file, keyed by its path from the repo root."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    return {"core_logic/" + name: _canonical_sha256(os.path.join(here, name)) for name in CODE_COVERED}
+
+
 def manifest(values=None):
     """The compiled capability manifest. THIS is the security object, not the raw config.
 
     Hashing the config would be wrong: two machines with identical env values but different policy
     code would report the same hash while holding different authority. The hash therefore covers the
-    compiled capability sets and the enforcement primitive behind each one.
+    compiled capability sets, the enforcement primitive behind each one, and the canonical content of
+    the classifier source named in CODE_COVERED. Code outside that list is not covered.
     """
     values = values or snapshot()["values"]
     fields = []
@@ -319,9 +353,10 @@ def manifest(values=None):
             "enforced_by": prim,
             "strength": strength,
         })
-    return {"schema": "policy-capability-manifest/1",
+    return {"schema": "policy-capability-manifest/2",
             "fields": fields,
-            "capabilities_held": capabilities(values)}
+            "capabilities_held": capabilities(values),
+            "code": code_hashes()}
 
 
 def manifest_hash(values=None):
@@ -352,6 +387,8 @@ def emit(stream=None):
     w = out.write
     w("[policy] env            : %s\n" % ENV_PATH)
     w("[policy] manifest       : %s\n" % manifest_hash(snap["values"]))
+    for path, digest in sorted(code_hashes().items()):
+        w("[policy] code covered   : %s %s\n" % (path, digest[:16]))
     for f in FIELDS:
         v = snap["values"][f.name]
         why = [fl for fl in snap["faults"] if fl["field"] == f.name]
