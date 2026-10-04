@@ -1,25 +1,25 @@
 # C.L.A.R.A.
 
-**Contextual Locally Aware Robust Agent** — an autonomous AI system that runs end to end on consumer hardware, checks every action before it takes it, and grades itself twice a day against its own source code.
+**Contextual Locally Aware Robust Agent**: an autonomous AI system that runs its orchestration, memory and voice on consumer hardware, with an optional governance gate on its file and process actions and a harness that grades it against its own source code.
 
-> Built and operated daily on an RTX 3050 laptop (4GB VRAM). The constraint is the interesting part.
+> Built on an RTX 3050 laptop (4GB VRAM). The constraint is the interesting part.
 
 ---
 
 ## What this actually is
 
-Most agent projects are a loop around an LLM with some tools bolted on. CLARA is built around two questions that only matter once an agent runs unsupervised:
+CLARA is built around two questions that matter once an agent runs unsupervised:
 
-1. **How do you stop it doing something it shouldn't?** → a governance gate that adjudicates every action *before* it executes, and writes a receipt to a tamper-evident ledger.
-2. **How do you know it still works?** → a deterministic evaluation harness that grades her against the live source tree twice a day, with no model in the grading path.
+1. **How do you stop it doing something it shouldn't?** → a governance gate that adjudicates its file and process actions and writes a receipt for each one to a local ledger.
+2. **How do you know it still works?** → a deterministic evaluation harness that grades her against the source, with no model in the grading path.
 
-Everything else — the orchestrator, the router, the memory, the tooling — exists to make those two things possible on hardware that cannot hold a large model in VRAM.
+Everything else (the orchestrator, the router, the memory, the tooling) exists to make those two things possible on hardware that cannot hold a large model in VRAM.
 
 ---
 
 ## The execution pipeline
 
-Every input takes the same path. There are no bypasses — a user message, a background trigger and an environment event are all the same kind of thing.
+Every input enters through the same queue and loop. A user message, a background trigger and an environment event are all the same kind of thing. Known lightweight system tasks skip the Interpreter and run directly.
 
 ```
 INPUT (user / system / background / environment)
@@ -32,7 +32,7 @@ INPUT (user / system / background / environment)
         ↓
      Router  →  FAST | CHAT | DELIBERATE
         ↓
-  Governance gate  →  ALLOW / REVIEW / DENY   (receipt written before the action fires)
+  Governance gate  →  ALLOW / REVIEW / DENY   (file and process tool calls, when the gate is on)
         ↓
     Execution  →  response
         ↓
@@ -45,9 +45,9 @@ INPUT (user / system / background / environment)
 |---|---|---|
 | `FAST` | tool is known, high confidence, no planning needed | ~2-4s |
 | `CHAT` | no tool needed, conversational | ~1.5-2.5s |
-| `DELIBERATE` | planning required, low confidence, or FAST failed | ~5-30s (ReAct, 8 turns) |
+| `DELIBERATE` | planning required, low confidence, or FAST failed | ~5-30s (ReAct, up to 8 turns) |
 
-FAST escalates to DELIBERATE on failure, injecting what was tried and why it failed, so the retry adapts instead of repeating.
+FAST escalates to DELIBERATE on failure, injecting what was tried and why it failed, so the retry adapts.
 
 ---
 
@@ -55,21 +55,21 @@ FAST escalates to DELIBERATE on failure, injecting what was tried and why it fai
 
 ### 1. Pre-execution governance
 
-Before any mutating action runs, it is abstracted into a **privacy-preserving envelope**: an operation class, a coarse target class, a hash of the target rather than the target itself, and coarse risk and reversibility labels. Raw content never leaves the machine.
+When the gate is on, each mutating file or process tool call is abstracted into a **privacy-preserving envelope** before it runs: an operation class, a coarse target class, a hash of the target, and coarse risk and reversibility labels. Raw content never leaves the machine.
 
-That envelope is adjudicated by a pluggable policy adapter — a local policy, or an external governance engine — which returns `ALLOW`, `REVIEW`, or `DENY`. The verdict and a receipt are written to a tamper-evident ledger **before** the action is allowed to proceed.
+That envelope is adjudicated by a pluggable policy adapter (a local policy, or an external governance engine), which returns `ALLOW`, `REVIEW`, or `DENY`. The envelope is signed when a signing key is configured, and the verdict and a receipt go to a local ledger. With a local policy, or in enforce mode, that happens **before** the action is allowed to proceed. In shadow mode an external engine is consulted off the hot path, so its verdict can land after the action runs.
 
 The design principle: *a record written after the fact, by the process that acted, is not evidence.* Authorization and its evidence have to be causally upstream of execution.
 
-Runs in shadow mode by default (verdicts recorded, nothing blocked) with an enforce mode and an explicit fail-open/closed posture.
+The gate is off by default. Switched on, it runs in shadow mode (verdicts recorded, nothing blocked) unless set to enforce, with an explicit fail-open/closed posture.
 
 ### 2. Self-verification (the Drill)
 
-Twice a day, a harness fires 23 questions per run (46 a day) at the live system and grades the answers **deterministically against the current source tree** — never by asking another model.
+A harness fires 23 questions per run at the live system, from a morning set and an evening set, and grades every checkable answer **deterministically**, with no model doing the grading: code questions against the source, computations by running them. The rest are marked unverifiable.
 
-- Each question class carries its own machine-checkable oracle: exact counts, set coverage, verbatim quotes, executable acceptance tests, and **absence-honesty probes** where the correct answer is "this does not exist" and any fabricated file:line citation auto-fails.
-- A **six-level difficulty ladder** promotes a question one rung after a sustained pass streak, so the benchmark gets harder as the system improves rather than saturating.
-- **The grader is itself under test.** A 62-case fixture suite regression-tests the scoring engine on every run and stamps the report if the engine fails its own fixtures. This exists because a scoring bug once quietly failed a set of answers that were correct — and a broken evaluation looks exactly like a broken model until something checks.
+- The checkable question classes carry their own oracle: exact counts, set coverage, verbatim quotes, executable acceptance tests, and **absence-honesty probes** where the correct answer is "this does not exist" and any fabricated file:line citation auto-fails.
+- A question that passes five runs in a row is flagged and moved one rung up a **six-level difficulty ladder**, so the benchmark gets harder as the system improves.
+- **The grader is itself under test.** A fixture suite regression-tests the scoring engine on every run and stamps the report if the engine fails its own fixtures. This exists because a scoring bug once quietly failed a set of answers that were correct, and a broken evaluation looks exactly like a broken model until something checks.
 
 ```bash
 python tests/test_harness.py --session morning   # or: evening
@@ -95,7 +95,7 @@ python tests/test_harness.py --session morning   # or: evening
 
 **Memory** is a three-tier store: an episodic log with vector retrieval (recency + cosine similarity), a deduplicated long-term fact vault, and a verbatim recent-conversation window. Persistence is crash-safe (temp file → fsync → atomic replace), because a hard kill mid-write once truncated the store.
 
-**Tooling** is 30+ tools across native Python functions and MCP servers, retrieved semantically per query rather than dumped into the prompt.
+**Tooling** is 30+ tools across native Python functions and MCP servers, retrieved semantically per query, so each prompt carries a small matched subset.
 
 ---
 
@@ -116,7 +116,7 @@ pip install -r requirements.txt
 cd interface && npm install && cd ..
 ```
 
-**Configuration** — create `core_logic/.env`:
+**Configuration:** create `core_logic/.env`:
 
 ```env
 DEEPSEEK_API_KEY=...      # cloud reasoning, via an OpenAI-compatible API
@@ -139,11 +139,12 @@ Or start the whole stack with `bash start_clara.sh` (and `bash stop_clara.sh` to
 
 ## Status and honesty
 
-This is a personal system in daily use, not a product. Some things worth stating plainly:
+This is a personal system.
 
-- The governance gate ships in **shadow mode** by default. Enforce mode exists and works, but the policy is still maturing.
-- Layer 4 of the self-assessment ladder — the agent applying its own fixes — is **deliberately not built**. She writes fix proposals for persistent failures; every one is a review-only artifact and nothing is auto-applied.
-- Some modules are legacy and no longer imported (`sight.py`, `ears.py`, `kokoro_mouth.py`). They are kept for history, not use.
+- The governance gate ships **off**. Switched on, it defaults to **shadow mode**; enforce mode exists, and the policy is still maturing.
+- Code execution through `python_repl` is classified as mutating, but its dispatch doesn't call the gate yet, so it produces no envelope and no receipt.
+- Layer 4 of the self-assessment ladder (the agent applying its own fixes) is **deliberately not built**. She writes fix proposals for persistent failures; every one is a review-only artifact and nothing is auto-applied.
+- Some modules are legacy and nothing imports them (`sight.py`, `ears.py`, `kokoro_mouth.py`).
 - It runs on 4GB of VRAM. That shapes almost every architectural decision here.
 
 ---
