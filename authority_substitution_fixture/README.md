@@ -114,15 +114,11 @@ supplied the red-team invariant that `route_coverage()` implements directly:
 > Remove any gated tool, recompute reachable protected effects using the authorities still present,
 > then fail the configuration if another node retains an ungated path to the same effect.
 
-**Ryan Feller** supplied the three-way separation the fixture is organised around, in correspondence on
-2026-09-17, and sharpened the completeness claim:
+**Ryan Feller** supplied the three-way separation the fixture is organised around, in correspondence in
+September 2026, and sharpened the completeness claim:
 
 > capture completeness cannot be established solely from the record population whose completeness is in
 > question. It needs an independently established reference surface.
-
-He also named what the fourth route is for, better than the first description of it did: a structurally
-incapable route gives the checker a genuine negative control, instead of making every route part of the
-failing population.
 
 *Named here with his written permission, granted 2026-09-17, and bounded at his request to the three-way
 split and the completeness sharpening. The fixture itself is not his and he declined any share of it.*
