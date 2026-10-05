@@ -273,39 +273,53 @@ def _is_demo_tool(tool_name: str) -> bool:
     return bool(p) and tool_name in getattr(p, "TOOL_NAMES", frozenset())
 
 
+def _admit(tool_name: str, args: dict, task_id: str = None):
+    """Admissibility gate (BRIEF_54 phase 0) for ONE action, called BEFORE any dispatch or lock.
+    Returns an Error-string when an ENFORCED decision blocks the action, else None.
+
+    Mutating tools only; µs when off/shadow (local adapters). In enforce mode a DENY/REVIEW blocks
+    the action and returns an Error-string, which rides the EXISTING failure machinery
+    (FAST→DELIBERATE escalation / ReAct adaptation), so the agent is never halted, only the action.
+
+    BRIEF_66 (2026-10-04): this used to live inline in _execute_mcp, the only call site, so the
+    native python_repl branches below never reached the gate at all. Every path that executes a
+    mutating tool calls this one helper. `tests/test_brief66_dispatch_gate.py` drives the real
+    dispatch functions and fails if any of them stops reaching it."""
+    decision = admissibility.gate(tool_name, args, task_id=task_id)
+    if not decision["enforced"]:
+        return None
+    slog.info(f">> [Admissibility] {decision['verdict']} '{tool_name}' — {decision['reason']} "
+              f"(receipt {decision['receipt_id']})")
+    if decision["verdict"] == admissibility.DENY:
+        return (f"Error: Action denied by admissibility gate — {decision['reason']} "
+                f"(receipt {decision['receipt_id']}). This action was NOT executed.")
+    # REVIEW: hold + best-effort Telegram note (no-ops if Telegram unconfigured).
+    try:
+        from .telegram_bot import notifier
+        asyncio.create_task(notifier.send(
+            f"[Admissibility] Action HELD for review: {tool_name} — {decision['reason']} "
+            f"(receipt {decision['receipt_id']})"))
+    except Exception:
+        pass
+    return (f"Error: Action held for review by admissibility gate — {decision['reason']} "
+            f"(receipt {decision['receipt_id']}). This action was NOT executed; "
+            f"Alkama has been notified for approval.")
+
+
 async def _execute_mcp(server: str, tool_name: str, args: dict, mcp_client, task_id: str = None) -> str:
     """Single MCP dispatch path shared by execute_fast and execute_deliberate
     (previously ~60 duplicated lines — Brief 36 C-17). Owns, in order:
-    write-ledger protection, atomic search, read-hash recording, fsmap update,
-    and read_file line-stamping.
+    the admissibility gate, write-ledger protection, atomic search, read-hash recording,
+    fsmap update, and read_file line-stamping.
 
     Ledger ordering fix (C-16): check_write now runs INSIDE the held write lock.
     The old order (check → acquire → write) let two tasks both pass the hash check
     before either wrote — the second then silently clobbered the first, the exact
     read-modify-write hazard the ledger exists to stop.
     """
-    # ── Admissibility gate (BRIEF_54 phase 0) — BEFORE any dispatch/lock. Mutating tools only;
-    # µs when off/shadow (local adapters). In enforce mode a DENY/REVIEW blocks the action and
-    # returns an Error-string, which rides the EXISTING failure machinery (FAST→DELIBERATE
-    # escalation / ReAct adaptation) — the agent is never halted, only the one action.
-    decision = admissibility.gate(tool_name, args, task_id=task_id)
-    if decision["enforced"]:
-        slog.info(f">> [Admissibility] {decision['verdict']} '{tool_name}' — {decision['reason']} "
-                  f"(receipt {decision['receipt_id']})")
-        if decision["verdict"] == admissibility.DENY:
-            return (f"Error: Action denied by admissibility gate — {decision['reason']} "
-                    f"(receipt {decision['receipt_id']}). This action was NOT executed.")
-        # REVIEW: hold + best-effort Telegram note (no-ops if Telegram unconfigured).
-        try:
-            from .telegram_bot import notifier
-            asyncio.create_task(notifier.send(
-                f"[Admissibility] Action HELD for review: {tool_name} — {decision['reason']} "
-                f"(receipt {decision['receipt_id']})"))
-        except Exception:
-            pass
-        return (f"Error: Action held for review by admissibility gate — {decision['reason']} "
-                f"(receipt {decision['receipt_id']}). This action was NOT executed; "
-                f"Alkama has been notified for approval.")
+    blocked = _admit(tool_name, args, task_id=task_id)
+    if blocked:
+        return blocked
 
     if task_id and tool_name == "write_file":
         path = args.get("path", "")
@@ -385,7 +399,11 @@ async def execute_fast(tool_name: str, args: dict, registry, mcp_client, task_id
             return res.get("answer", "No results found.")
 
         elif tool_name == "python_repl":
-            return await asyncio.to_thread(run_python_code, args.get("code", ""))
+            code = args.get("code", "")
+            blocked = _admit("python_repl", {"code": code}, task_id=task_id)   # BRIEF_66
+            if blocked:
+                return blocked
+            return await asyncio.to_thread(run_python_code, code)
 
         elif tool_name == "date_time":
             return await asyncio.to_thread(get_time_date, int(args.get("offset_days", 0) or 0),
@@ -493,7 +511,11 @@ async def execute_deliberate(
 
         elif tool_name == "python_repl":
             (code,) = _extract_param(query, "code")
-            return await asyncio.to_thread(run_python_code, code or query)
+            code = code or query
+            blocked = _admit("python_repl", {"code": code}, task_id=task_id)   # BRIEF_66
+            if blocked:
+                return blocked
+            return await asyncio.to_thread(run_python_code, code)
 
         elif tool_name == "date_time":
             return await asyncio.to_thread(get_time_date)

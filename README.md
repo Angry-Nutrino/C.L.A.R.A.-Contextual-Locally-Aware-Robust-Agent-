@@ -142,7 +142,7 @@ Or start the whole stack with `bash start_clara.sh` (and `bash stop_clara.sh` to
 This is a personal system.
 
 - The governance gate ships **off**. Switched on, it defaults to **shadow mode**; enforce mode exists, and the policy is still maturing.
-- Code execution through `python_repl` is classified as mutating, but its dispatch doesn't call the gate yet, so it produces no envelope and no receipt.
+- Code execution through `python_repl` reaches the gate on both dispatch paths. It's judged by the local policy only, even when a remote engine is configured, and it's enforced only when a separate interpreter setting says enforce as well as the global one. Its risk class currently comes out critical even for `print(2 + 2)`, so for code it isn't a usable signal yet.
 - Layer 4 of the self-assessment ladder (the agent applying its own fixes) is **deliberately not built**. She writes fix proposals for persistent failures; every one is a review-only artifact and nothing is auto-applied.
 - Some modules are legacy and nothing imports them (`sight.py`, `ears.py`, `kokoro_mouth.py`).
 - It runs on 4GB of VRAM. That shapes almost every architectural decision here.

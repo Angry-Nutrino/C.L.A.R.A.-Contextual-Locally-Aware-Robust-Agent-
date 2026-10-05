@@ -61,6 +61,10 @@ except ImportError:
 _LEDGER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admissibility_ledger.json")
 _POLICY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admissibility_policy.json")
 _MAX_LEDGER = 2000
+# BRIEF_66 decision 3 (Alkama 2026-10-04). The interpreter is the most-called tool, so its rows get
+# their own cap inside the same file. They can never evict a file or process decision, and the other
+# rows can never evict them. 1000 rows keeps the whole file near 2.4 MB at ~0.8 KB a row (measured).
+_MAX_LEDGER_INTERPRETER = 1000
 
 ALLOW, REVIEW, DENY = "ALLOW", "REVIEW", "DENY"
 
@@ -77,7 +81,10 @@ MUTATING_TOOLS = frozenset({
     # miss would reopen exactly this hole one level down.
     "python_repl", "run_python_code",
 })
-_MUTATING_HINTS = ("write", "create", "move", "delete", "remove", "kill", "terminate", "edit_")
+# The interpreter tools, which BRIEF_66 treats separately: local adapter only, their own mode, their
+# own ledger cap. Both names are listed because the envelope can carry either.
+INTERPRETER_TOOLS = frozenset({"python_repl", "run_python_code"})
+_MUTATING_HINTS =("write", "create", "move", "delete", "remove", "kill", "terminate", "edit_")
 
 _INTENTS = {
     "write_file": "create_or_modify_file", "edit_block": "modify_file",
@@ -303,6 +310,10 @@ def gate_enabled() -> bool:
 
 def gate_mode() -> str:
     return _policy.resolve("ADMISSIBILITY_MODE")
+
+
+def interpreter_mode() -> str:
+    return _policy.resolve("ADMISSIBILITY_INTERPRETER_MODE")
 
 
 def _fail_open() -> bool:
@@ -936,6 +947,18 @@ def gate(tool_name: str, args: dict, task_id=None) -> dict:
         return {"verdict": ALLOW, "reason": "gate off or non-mutating", "receipt_id": "",
                 "adapter": "", "mode": mode, "enforced": False}
     name, evaluate = _adapter()
+    interpreter = tool_name in INTERPRETER_TOOLS
+    if interpreter:
+        # BRIEF_66 decision 2 (Alkama 2026-10-04): a code-execution envelope never leaves the machine.
+        # The envelope carries no code, but sending one per call would show a remote engine the call
+        # rate. With a remote adapter configured, the local written policy adjudicates instead.
+        if name in _REMOTE_ADAPTERS:
+            name, evaluate = "policy", _policy_evaluate
+        # BRIEF_66 decision 1: enforced only when BOTH modes say enforce. Interpreter risk tracks what
+        # the code text resembles, so an enforce flip meant for files and processes must not hold
+        # every code call along with them.
+        if interpreter_mode() != "enforce":
+            mode = "shadow"
     envelope = build_envelope(tool_name, args, task_id)
     local_ctx = {"path": str((args or {}).get("path", ""))}
     receipt = uuid.uuid4().hex[:12]
@@ -952,15 +975,41 @@ def gate(tool_name: str, args: dict, task_id=None) -> dict:
     # Synchronous path: enforce mode (verdict needed before proceeding) and all local adapters.
     verdict, reason = _safe_evaluate(name, evaluate, envelope, local_ctx)
     enforced = (mode == "enforce") and verdict in (REVIEW, DENY)
-    _ledger_append({
+    row = {
         "receipt_id": receipt, "verdict": verdict, "reason": reason, "adapter": name,
         "mode": mode, "enforced": enforced, "envelope": envelope,
-    })
+    }
+    if interpreter:
+        row["class"] = "interpreter"
+    _ledger_append(row)
     return {"verdict": verdict, "reason": reason, "receipt_id": receipt,
             "adapter": name, "mode": mode, "enforced": enforced}
 
 
 _ledger_lock = threading.Lock()
+
+
+def _is_interpreter_row(row: dict) -> bool:
+    """Rows written before BRIEF_66 carry no `class`, so the envelope's tool decides for them."""
+    return (row.get("class") == "interpreter"
+            or (row.get("envelope") or {}).get("tool") in INTERPRETER_TOOLS)
+
+
+def _trim_ledger(rows: list) -> list:
+    """Keep the newest _MAX_LEDGER non-interpreter rows and the newest _MAX_LEDGER_INTERPRETER
+    interpreter rows, in their original order. Two caps, so neither class can evict the other."""
+    kept_interp = kept_other = 0
+    out = []
+    for row in reversed(rows):
+        if _is_interpreter_row(row):
+            if kept_interp < _MAX_LEDGER_INTERPRETER:
+                out.append(row)
+                kept_interp += 1
+        elif kept_other < _MAX_LEDGER:
+            out.append(row)
+            kept_other += 1
+    out.reverse()
+    return out
 
 
 def _ledger_append(entry: dict) -> None:
@@ -978,7 +1027,7 @@ def _ledger_append(entry: dict) -> None:
             except (OSError, json.JSONDecodeError):
                 rows = []
             rows.append(entry)
-            rows = rows[-_MAX_LEDGER:]
+            rows = _trim_ledger(rows)
             fd, tmp = tempfile.mkstemp(prefix=".admissibility_ledger.", suffix=".tmp",
                                        dir=os.path.dirname(_LEDGER_PATH) or ".")
             with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -996,7 +1045,8 @@ if __name__ == "__main__":
     import shutil
     fails = []
     _saved = {k: os.environ.get(k) for k in
-              ("ADMISSIBILITY_GATE", "ADMISSIBILITY_ADAPTER", "ADMISSIBILITY_MODE", "ADMISSIBILITY_FAIL")}
+              ("ADMISSIBILITY_GATE", "ADMISSIBILITY_ADAPTER", "ADMISSIBILITY_MODE", "ADMISSIBILITY_FAIL",
+               "ADMISSIBILITY_INTERPRETER_MODE")}
     tmpdir = tempfile.mkdtemp(prefix="adm_test_")
     _real_ledger, _real_policy = _LEDGER_PATH, _POLICY_PATH
     _LEDGER_PATH = os.path.join(tmpdir, "ledger.json")
@@ -1073,9 +1123,96 @@ if __name__ == "__main__":
     finally:
         globals()["_adapter"] = _orig_adapter_fn  # restore the real function
 
-    # (7) ledger ring cap holds.
-    if len(json.load(open(_LEDGER_PATH, encoding="utf-8"))["decisions"]) > _MAX_LEDGER:
+    # (7) ledger ring cap holds, per class (BRIEF_66 decision 3).
+    _led7 = json.load(open(_LEDGER_PATH, encoding="utf-8"))["decisions"]
+    if (sum(1 for r in _led7 if not _is_interpreter_row(r)) > _MAX_LEDGER
+            or sum(1 for r in _led7 if _is_interpreter_row(r)) > _MAX_LEDGER_INTERPRETER):
         fails.append("ledger ring cap exceeded")
+    # Two caps, order kept, newest kept. Synthetic rows, so no file I/O.
+    _rows = []
+    for _i in range(_MAX_LEDGER + 5):
+        _rows.append({"n": _i, "envelope": {"tool": "write_file"}})
+        if _i < _MAX_LEDGER_INTERPRETER + 5:
+            _rows.append({"n": _i, "class": "interpreter", "envelope": {"tool": "python_repl"}})
+    _kept = _trim_ledger(_rows)
+    _ki = [r for r in _kept if _is_interpreter_row(r)]
+    _ko = [r for r in _kept if not _is_interpreter_row(r)]
+    if len(_ki) != _MAX_LEDGER_INTERPRETER or len(_ko) != _MAX_LEDGER:
+        fails.append(f"per-class trim kept {len(_ki)} interpreter / {len(_ko)} other rows")
+    if _ko[0]["n"] != 5 or _ki[0]["n"] != 5 or _ko[-1]["n"] != _MAX_LEDGER + 4:
+        fails.append("per-class trim must keep the NEWEST rows of each class")
+    if [r["n"] for r in _ko] != sorted(r["n"] for r in _ko):
+        fails.append("per-class trim must keep the original order")
+    # An interpreter flood must not evict a single file decision, and the reverse.
+    _flood = ([{"n": _i, "envelope": {"tool": "edit_block"}} for _i in range(10)]
+              + [{"n": _i, "envelope": {"tool": "python_repl"}} for _i in range(3 * _MAX_LEDGER_INTERPRETER)])
+    if sum(1 for r in _trim_ledger(_flood) if not _is_interpreter_row(r)) != 10:
+        fails.append("an interpreter flood evicted file decisions")
+    # Rows written before BRIEF_66 have no `class` key; the envelope tool must still classify them.
+    if not _is_interpreter_row({"envelope": {"tool": "run_python_code"}}):
+        fails.append("legacy interpreter row (no class key) not recognised")
+    # And through the REAL append path, with the caps shrunk, so a regression in _ledger_append
+    # itself (back to a single ring) fails here instead of passing on the synthetic check above.
+    _caps = (_MAX_LEDGER, _MAX_LEDGER_INTERPRETER)
+    _MAX_LEDGER, _MAX_LEDGER_INTERPRETER = 3, 2
+    _cap_path = _LEDGER_PATH
+    _LEDGER_PATH = os.path.join(tmpdir, "ledger_caps.json")
+    try:
+        for _i in range(5):
+            _ledger_append({"receipt_id": "o%d" % _i, "envelope": {"tool": "write_file"}})
+            _ledger_append({"receipt_id": "i%d" % _i, "class": "interpreter",
+                            "envelope": {"tool": "python_repl"}})
+        _ids = [r["receipt_id"] for r in json.load(open(_LEDGER_PATH, encoding="utf-8"))["decisions"]]
+        if _ids != ["o2", "o3", "i3", "o4", "i4"]:
+            fails.append(f"_ledger_append must keep the newest 3 other + 2 interpreter rows in order, got {_ids}")
+    finally:
+        _MAX_LEDGER, _MAX_LEDGER_INTERPRETER = _caps
+        _LEDGER_PATH = _cap_path
+
+    # (7b) BRIEF_66 decisions 1 and 2 (Alkama 2026-10-04): the interpreter is adjudicated by the
+    # LOCAL policy even when a remote adapter is configured, and it is enforced only when BOTH
+    # ADMISSIBILITY_MODE and ADMISSIBILITY_INTERPRETER_MODE say enforce.
+    _remote_calls = []
+
+    def _fake_remote(env, ctx):
+        _remote_calls.append(env.get("tool"))
+        return DENY, "fake remote (test)"
+    _ADAPTERS["remote_b66"] = _fake_remote
+    _REMOTE_ADAPTERS.add("remote_b66")
+    os.environ.update({"ADMISSIBILITY_GATE": "on", "ADMISSIBILITY_ADAPTER": "remote_b66",
+                       "ADMISSIBILITY_FAIL": "open"})
+    json.dump({"review_tools": ["python_repl"], "default": "allow"},
+              open(_POLICY_PATH, "w", encoding="utf-8"))
+    try:
+        _code = {"code": "open('B66_SECRET_PATH.txt','w').write('B66_SECRET_BODY')"}
+        for _gm, _im, _want_mode, _want_enf in (("enforce", "shadow", "shadow", False),
+                                               ("shadow", "enforce", "shadow", False),
+                                               ("enforce", "enforce", "enforce", True)):
+            os.environ["ADMISSIBILITY_MODE"] = _gm
+            os.environ["ADMISSIBILITY_INTERPRETER_MODE"] = _im
+            _d = gate("python_repl", _code, task_id="t-b66")
+            if _d["adapter"] != "policy" or _d["verdict"] != REVIEW:
+                fails.append(f"B66 [{_gm}/{_im}]: interpreter must be adjudicated by the local "
+                             f"policy, got adapter={_d['adapter']!r} verdict={_d['verdict']!r}")
+            if _d["mode"] != _want_mode or _d["enforced"] != _want_enf:
+                fails.append(f"B66 [{_gm}/{_im}]: mode={_d['mode']!r} enforced={_d['enforced']!r}, "
+                             f"want {_want_mode!r}/{_want_enf!r}")
+        if "python_repl" in _remote_calls:
+            fails.append("B66: an interpreter envelope reached the remote adapter")
+        _row = [r for r in json.load(open(_LEDGER_PATH, encoding="utf-8"))["decisions"]
+                if r.get("receipt_id") == _d["receipt_id"]]
+        if not _row or _row[-1].get("class") != "interpreter":
+            fails.append("B66: interpreter decision not ledgered with class=interpreter")
+        if _row and ("B66_SECRET" in json.dumps(_row[-1])):
+            fails.append("B66 PRIVACY: code text reached the ledger row")
+        # Every OTHER mutating tool keeps the configured remote adapter (synchronous in enforce).
+        os.environ["ADMISSIBILITY_MODE"] = "enforce"
+        _w = gate("write_file", {"path": "x.txt", "content": "y"})
+        if _w["adapter"] != "remote_b66" or "write_file" not in _remote_calls:
+            fails.append("B66: the interpreter rule leaked onto write_file")
+    finally:
+        _ADAPTERS.pop("remote_b66", None)
+        _REMOTE_ADAPTERS.discard("remote_b66")
 
     # (8) SHADOW + remote adapter: returns immediately (non-enforced ALLOW); verdict ledgered async
     # under the same receipt — the hot path never waits on the (simulated) network round-trip.

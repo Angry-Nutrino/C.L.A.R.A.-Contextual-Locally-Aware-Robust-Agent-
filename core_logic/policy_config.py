@@ -208,6 +208,18 @@ FIELDS = (
         "shadow produces verdicts that cannot stop anything",
     ),
     Field(
+        # BRIEF_66, Alkama 2026-10-04. Code execution gets its own mode, so flipping
+        # ADMISSIBILITY_MODE to enforce does not also start refusing python_repl, whose risk class
+        # tracks what the code TEXT resembles (measured 2026-09-23). The interpreter is enforced only
+        # when BOTH this and ADMISSIBILITY_MODE say enforce. At `shadow` the interpreter acts with no
+        # binding verdict, so the capability is declared here and the manifest stays honest even
+        # when the global mode is enforce.
+        "ADMISSIBILITY_INTERPRETER_MODE", "shadow",
+        {"enforce": (), "shadow": (CAP_UNADJUDICATED,)},
+        "branch",
+        "shadow records a verdict for each code execution and cannot stop one",
+    ),
+    Field(
         "ADMISSIBILITY_FAIL", "open",
         {"closed": (), "open": (CAP_UNADJUDICATED,)},
         "branch",
@@ -393,7 +405,7 @@ def emit(stream=None):
         v = snap["values"][f.name]
         why = [fl for fl in snap["faults"] if fl["field"] == f.name]
         tag = ("  <- %s value, using default" % why[0]["kind"]) if why else ""
-        w("[policy]   %-26s = %-22s%s\n" % (f.name, v, tag))
+        w("[policy]   %-30s = %-22s%s\n" % (f.name, v, tag))
     w("[policy] capabilities   : %s\n" % (", ".join(capabilities(snap["values"])) or "none"))
     if soft:
         for fl in soft:
