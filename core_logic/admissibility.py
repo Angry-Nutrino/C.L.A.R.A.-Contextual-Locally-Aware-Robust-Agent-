@@ -412,6 +412,48 @@ def verify_envelope(envelope: dict, public_key_b64: str) -> bool:
         return False
 
 
+# D24, 2026-10-11 (the enforced-DENY test). The envelope signature covers the REQUEST. The decision
+# (verdict, mode, enforced) was assembled after signing and sat beside it unsigned, which declaration
+# v1.1 disclosed as "no receipt-level signature", so a DENY with enforced=true could not be verified as
+# signed. The decision signature covers the decision fields AND the envelope's own signature: a verdict
+# cannot be edited after the fact or moved onto a different request without verification failing.
+DECISION_FIELDS = ("receipt_id", "verdict", "reason", "adapter", "mode", "enforced")
+
+
+def canonical_decision_bytes(row: dict) -> bytes:
+    """The exact bytes a decision signature covers: the decision fields plus the envelope signature."""
+    body = {k: row.get(k) for k in DECISION_FIELDS}
+    body["envelope_signature"] = (row.get("envelope") or {}).get("signature") or ""
+    return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _apply_decision_signature(row: dict) -> None:
+    """Sign a ledger row's decision in place. Same posture as the envelope: no key, no signature."""
+    key = _signing_key()
+    if key is None:
+        return
+    import base64
+    row["decision_signature"] = base64.b64encode(key.sign(canonical_decision_bytes(row))).decode()
+    row["decision_signature_alg"] = _SIG_ALG
+
+
+def verify_decision(row: dict, public_key_b64: str) -> bool:
+    """Verify a ledger row's decision signature. Pair it with verify_envelope(row["envelope"], ...):
+    the envelope proves what was asked, the decision proves what was decided about that request.
+    Returns False on any failure rather than raising."""
+    import base64
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        sig = row.get("decision_signature") or ""
+        if not sig:
+            return False
+        pub = Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key_b64))
+        pub.verify(base64.b64decode(sig), canonical_decision_bytes(row))
+        return True
+    except Exception:
+        return False
+
+
 def build_envelope(tool_name: str, args: dict, task_id=None) -> dict:
     """The ABSTRACT governance envelope — metadata only, never content (see PRIVACY FLOOR)."""
     args = args if isinstance(args, dict) else {}
@@ -923,10 +965,12 @@ def _evaluate_and_ledger(name, evaluate, envelope, local_ctx, receipt, mode):
     it under the SAME receipt the caller already holds. Shadow never enforces, so this verdict is
     observational only. Runs in a daemon thread; never raises."""
     verdict, reason = _safe_evaluate(name, evaluate, envelope, local_ctx)
-    _ledger_append({
+    row = {
         "receipt_id": receipt, "verdict": verdict, "reason": reason, "adapter": name,
         "mode": mode, "enforced": False, "async": True, "envelope": envelope,
-    })
+    }
+    _apply_decision_signature(row)
+    _ledger_append(row)
 
 
 def gate(tool_name: str, args: dict, task_id=None) -> dict:
@@ -981,6 +1025,7 @@ def gate(tool_name: str, args: dict, task_id=None) -> dict:
     }
     if interpreter:
         row["class"] = "interpreter"
+    _apply_decision_signature(row)
     _ledger_append(row)
     return {"verdict": verdict, "reason": reason, "receipt_id": receipt,
             "adapter": name, "mode": mode, "enforced": enforced}
@@ -1354,6 +1399,45 @@ if __name__ == "__main__":
         # An unsigned envelope must not verify.
         if verify_envelope(_e0, _pub_b64):
             fails.append("binding: unsigned envelope reported as verified")
+
+        # D24: the decision is signed too, and bound to its own request.
+        _row = {"receipt_id": "r-d24", "verdict": DENY, "reason": "policy: tool 'python_repl' is denied",
+                "adapter": "policy", "mode": "enforce", "enforced": True, "envelope": _s}
+        _apply_decision_signature(_row)
+        if not _row.get("decision_signature") or _row.get("decision_signature_alg") != _SIG_ALG:
+            fails.append("decision: not signed with a key configured")
+        if not verify_decision(_row, _pub_b64):
+            fails.append("decision: freshly signed decision does not verify")
+        for _field, _bad in (("verdict", ALLOW), ("enforced", False), ("mode", "shadow"),
+                             ("receipt_id", "r-other"), ("reason", "policy: default")):
+            _t = dict(_row); _t[_field] = _bad
+            if verify_decision(_t, _pub_b64):
+                fails.append(f"decision: tampering with {_field!r} still verifies, field not covered")
+        # Moving the decision onto a different (validly signed) request must fail: the binding.
+        _other_env = build_envelope("write_file", {"path": r"C:\tmp\b.txt", "content": "y"})
+        _moved = dict(_row); _moved["envelope"] = _other_env
+        if verify_decision(_moved, _pub_b64):
+            fails.append("decision: decision moved to another request still verifies, not bound")
+        if verify_decision(_row, _b64.b64encode(_other).decode()):
+            fails.append("decision: verified against the WRONG public key")
+        if verify_decision({k: v for k, v in _row.items() if k != "decision_signature"}, _pub_b64):
+            fails.append("decision: unsigned decision reported as verified")
+        # End to end through gate(): an enforced DENY lands in the ledger with a verifiable decision.
+        json.dump({"deny_tools": ["kill_process"], "review_tools": [], "deny_path_substrings": [],
+                   "default": "allow"}, open(_POLICY_PATH, "w", encoding="utf-8"))
+        _saved_adapter_fn = globals()["_adapter"]
+        globals()["_adapter"] = lambda: ("policy", _policy_evaluate)
+        os.environ["ADMISSIBILITY_GATE"] = "on"
+        os.environ["ADMISSIBILITY_MODE"] = "enforce"
+        try:
+            _g = gate("kill_process", {"pid": 1}, task_id="t-d24")
+            _last = json.load(open(_LEDGER_PATH, encoding="utf-8"))["decisions"][-1]
+            if not (_g["verdict"] == DENY and _g["enforced"] and _last["receipt_id"] == _g["receipt_id"]):
+                fails.append("decision: gate() did not ledger the enforced DENY under its receipt")
+            elif not (verify_decision(_last, _pub_b64) and verify_envelope(_last["envelope"], _pub_b64)):
+                fails.append("decision: ledgered enforced DENY does not verify end to end")
+        finally:
+            globals()["_adapter"] = _saved_adapter_fn
     except ImportError:
         pass  # cryptography absent — signing degrades, which the unconfigured case above already pins
     finally:
