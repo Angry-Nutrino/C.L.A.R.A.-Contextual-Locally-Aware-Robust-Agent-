@@ -275,7 +275,8 @@ def _is_demo_tool(tool_name: str) -> bool:
 
 def _admit(tool_name: str, args: dict, task_id: str = None):
     """Admissibility gate (BRIEF_54 phase 0) for ONE action, called BEFORE any dispatch or lock.
-    Returns an Error-string when an ENFORCED decision blocks the action, else None.
+    Returns (blocked, decision): `blocked` is an Error-string when an ENFORCED decision blocks the
+    action, else None; `decision` is what the gate returned, which _recheck needs at dispatch.
 
     Mutating tools only; µs when off/shadow (local adapters). In enforce mode a DENY/REVIEW blocks
     the action and returns an Error-string, which rides the EXISTING failure machinery
@@ -287,12 +288,12 @@ def _admit(tool_name: str, args: dict, task_id: str = None):
     dispatch functions and fails if any of them stops reaching it."""
     decision = admissibility.gate(tool_name, args, task_id=task_id)
     if not decision["enforced"]:
-        return None
+        return None, decision
     slog.info(f">> [Admissibility] {decision['verdict']} '{tool_name}' — {decision['reason']} "
               f"(receipt {decision['receipt_id']})")
     if decision["verdict"] == admissibility.DENY:
         return (f"Error: Action denied by admissibility gate — {decision['reason']} "
-                f"(receipt {decision['receipt_id']}). This action was NOT executed.")
+                f"(receipt {decision['receipt_id']}). This action was NOT executed."), decision
     # REVIEW: hold + best-effort Telegram note (no-ops if Telegram unconfigured).
     try:
         from .telegram_bot import notifier
@@ -303,7 +304,35 @@ def _admit(tool_name: str, args: dict, task_id: str = None):
         pass
     return (f"Error: Action held for review by admissibility gate — {decision['reason']} "
             f"(receipt {decision['receipt_id']}). This action was NOT executed; "
-            f"Alkama has been notified for approval.")
+            f"Alkama has been notified for approval."), decision
+
+
+def _recheck(tool_name: str, decision: dict, args: dict):
+    """The exact-action binding (2026-10-12), run IMMEDIATELY before a gated action leaves the process.
+
+    Recomputes the arguments' digest under the decision's nonce and compares it with the digest the
+    gate signed into the envelope. A mismatch means the arguments about to run are not the arguments
+    that were adjudicated, so the action is refused: in every mode, because this is an integrity check
+    on the record, not a policy verdict, and a run whose record describes different arguments is the
+    one outcome the record exists to rule out. Returns an Error-string on mismatch, else None.
+    A decision without a digest (gate off, non-mutating tool) matches trivially."""
+    if admissibility.args_match(decision, args):
+        if (decision or {}).get("args_digest"):
+            slog.info(f">> [Admissibility] args digest matched at dispatch '{tool_name}' "
+                      f"(receipt {decision.get('receipt_id')}, digest {decision['args_digest'][:16]})")
+        return None
+    slog.warning(f">> [Admissibility] ARGS MISMATCH at dispatch '{tool_name}' "
+                 f"(receipt {decision.get('receipt_id')}): refused")
+    return (f"Error: Action refused at dispatch: its arguments do not match the ones the admissibility "
+            f"gate recorded (receipt {decision.get('receipt_id')}). This action was NOT executed.")
+
+
+async def _call_checked(mcp_client, server: str, tool_name: str, args: dict, decision: dict):
+    """The one place a gated MCP action leaves the process: re-check the arguments, then call."""
+    mismatch = _recheck(tool_name, decision, args)
+    if mismatch:
+        return mismatch
+    return await mcp_client.call(server, tool_name, args)
 
 
 async def _execute_mcp(server: str, tool_name: str, args: dict, mcp_client, task_id: str = None) -> str:
@@ -317,7 +346,7 @@ async def _execute_mcp(server: str, tool_name: str, args: dict, mcp_client, task
     before either wrote — the second then silently clobbered the first, the exact
     read-modify-write hazard the ledger exists to stop.
     """
-    blocked = _admit(tool_name, args, task_id=task_id)
+    blocked, decision = _admit(tool_name, args, task_id=task_id)
     if blocked:
         return blocked
 
@@ -329,15 +358,15 @@ async def _execute_mcp(server: str, tool_name: str, args: dict, mcp_client, task
                 ok, reason = resource_ledger.check_write(task_id, path)
                 if not ok:
                     return f"Error: {reason}"
-                result = await mcp_client.call(server, tool_name, args)
+                result = await _call_checked(mcp_client, server, tool_name, args, decision)
             finally:
                 write_lock.release()
         else:
-            result = await mcp_client.call(server, tool_name, args)
+            result = await _call_checked(mcp_client, server, tool_name, args, decision)
     elif tool_name == "start_search":
         result = await _atomic_search(server, mcp_client, args)
     else:
-        result = await mcp_client.call(server, tool_name, args)
+        result = await _call_checked(mcp_client, server, tool_name, args, decision)
 
     result_str = result if isinstance(result, str) else str(result)
 
@@ -400,9 +429,12 @@ async def execute_fast(tool_name: str, args: dict, registry, mcp_client, task_id
 
         elif tool_name == "python_repl":
             code = args.get("code", "")
-            blocked = _admit("python_repl", {"code": code}, task_id=task_id)   # BRIEF_66
+            blocked, decision = _admit("python_repl", {"code": code}, task_id=task_id)   # BRIEF_66
             if blocked:
                 return blocked
+            mismatch = _recheck("python_repl", decision, {"code": code})       # exact-action binding
+            if mismatch:
+                return mismatch
             return await asyncio.to_thread(run_python_code, code)
 
         elif tool_name == "date_time":
@@ -512,9 +544,12 @@ async def execute_deliberate(
         elif tool_name == "python_repl":
             (code,) = _extract_param(query, "code")
             code = code or query
-            blocked = _admit("python_repl", {"code": code}, task_id=task_id)   # BRIEF_66
+            blocked, decision = _admit("python_repl", {"code": code}, task_id=task_id)   # BRIEF_66
             if blocked:
                 return blocked
+            mismatch = _recheck("python_repl", decision, {"code": code})       # exact-action binding
+            if mismatch:
+                return mismatch
             return await asyncio.to_thread(run_python_code, code)
 
         elif tool_name == "date_time":

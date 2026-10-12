@@ -57,7 +57,7 @@ FAST escalates to DELIBERATE on failure, injecting what was tried and why it fai
 
 When the gate is on, each mutating file or process tool call is abstracted into a **privacy-preserving envelope** before it runs: an operation class, a coarse target class, a hash of the target, and coarse risk and reversibility labels. Raw content never leaves the machine.
 
-That envelope is adjudicated by a pluggable policy adapter (a local policy, or an external governance engine), which returns `ALLOW`, `REVIEW`, or `DENY`. The envelope is signed when a signing key is configured, and the verdict and a receipt go to a local ledger. With a local policy, or in enforce mode, that happens **before** the action is allowed to proceed. In shadow mode an external engine is consulted off the hot path, so its verdict can land after the action runs.
+That envelope is adjudicated by a pluggable policy adapter (a local policy, or an external governance engine), which returns `ALLOW`, `REVIEW`, or `DENY`. When a signing key is configured, the envelope and the decision are each signed, and the verdict and a receipt go to a local ledger. The envelope also carries a digest of the full arguments; the executor recomputes it immediately before dispatch and refuses on a mismatch, so a gated action cannot run with arguments other than the ones that were adjudicated. With a local policy, or in enforce mode, that happens **before** the action is allowed to proceed. In shadow mode an external engine is consulted off the hot path, so its verdict can land after the action runs.
 
 The design principle: *a record written after the fact, by the process that acted, is not evidence.* Authorization and its evidence have to be causally upstream of execution.
 

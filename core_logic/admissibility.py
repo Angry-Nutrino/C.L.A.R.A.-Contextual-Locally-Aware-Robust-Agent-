@@ -20,9 +20,11 @@ Flags (core_logic/.env; all safe-by-default):
 
 PRIVACY FLOOR (load-bearing — same posture as the confirmed partner A contract):
 - The envelope is ABSTRACT: tool, intent, target_type, sha256(path basename), arg summary
-  (keys + value lengths ONLY), classification, mode. Raw file contents / full paths / conversation
-  NEVER enter the envelope. Local adapters additionally receive local_ctx (the real path) which
-  NEVER leaves the machine; a remote adapter gets the envelope alone.
+  (keys + value lengths ONLY), a nonce-keyed digest of the full arguments (2026-10-12, the exact-action
+  binding; a hash, never the values), classification, mode. Raw file contents / full paths /
+  conversation NEVER enter the envelope. Local adapters additionally receive local_ctx (the real path)
+  which NEVER leaves the machine; a remote adapter gets only the fields its payload builder picks, and
+  none of the three picks the digest.
 - The ledger (core_logic/admissibility_ledger.json) is local telemetry — gitignored, watcher-ignored.
 
 Known v1 hole (documented, not hidden): python_repl executes arbitrary code and can write files
@@ -332,10 +334,19 @@ def is_mutating(tool_name: str) -> bool:
 # execution? The honest answer was that the binding was STRUCTURAL, the signature field was empty, and
 # there was no policy version at all. These two close the cheap half of that.
 #
-# What this does NOT do, stated plainly so nobody reads more into it: it does not solve
-# time-of-check-to-time-of-use. Signing the envelope proves the envelope was not altered after the gate
-# saw it; it does NOT prove the action executed matches the action adjudicated. That needs the verdict
-# re-checked against the actual arguments at execution time, which is a design change, not a field.
+# What this did NOT do, stated plainly at the time: it did not solve time-of-check-to-time-of-use.
+# Signing the envelope proved the envelope was not altered after the gate saw it; it did NOT prove the
+# action executed matches the action adjudicated, because the envelope carried argument names and
+# lengths only, so a same-length substitution still verified.
+#
+# 2026-10-12 (the exact-action binding, raised by the same external reviewer after the D24 runs). The
+# envelope now also carries `args_digest`: a hash of the FULL canonical arguments keyed by the
+# envelope's nonce, inside the signed bytes. And the executor (tool_executor._recheck) recomputes it
+# from the arguments it is about to run, immediately before dispatch, and refuses on a mismatch. So
+# what ran is tied to what was decided, and the values themselves still never enter the envelope.
+# The limit that remains: a digest of a SHORT or GUESSABLE value can be confirmed by hashing guesses,
+# because the nonce sits in the row. ADMISSIBILITY_ARGS_KEY closes that (HMAC with a secret that only
+# a verifier is given), at the cost of public recomputation.
 
 _SIG_ALG = "ed25519"
 
@@ -454,6 +465,56 @@ def verify_decision(row: dict, public_key_b64: str) -> bool:
         return False
 
 
+# The exact-action binding (2026-10-12). One formula, used by the gate when it builds the envelope and
+# by the executor when it re-checks, so the two can never disagree about what "the same arguments"
+# means. A third party recomputes it with nothing but hashlib:
+#     sha256((nonce + ":" + json.dumps(args, sort_keys=True, separators=(",", ":"),
+#                                      ensure_ascii=True, default=str)).encode("utf-8")).hexdigest()
+# With ADMISSIBILITY_ARGS_KEY set, the same message is HMAC-SHA256'd under that key instead.
+ARGS_DIGEST_ALG = "sha256(nonce:canonical-args)"
+ARGS_DIGEST_ALG_KEYED = "hmac-sha256(nonce:canonical-args)"
+
+
+def canonical_args_bytes(args) -> bytes:
+    """The canonical form of an action's arguments: sorted keys, no whitespace, ASCII-escaped.
+    Non-dict input normalises to {} exactly as build_envelope does, so both sides hash the same thing."""
+    args = args if isinstance(args, dict) else {}
+    return json.dumps(args, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+                      default=str).encode("utf-8")
+
+
+def _args_key():
+    """The optional HMAC key for the digest, or None. Read per call (like the signing key) so the
+    self-test can toggle it. A configured key means a reader of the ledger can no longer confirm a
+    guessed value; only someone given the key can recompute."""
+    raw = os.getenv("ADMISSIBILITY_ARGS_KEY", "")
+    return raw.encode("utf-8") if raw.strip() else None
+
+
+def args_digest(nonce: str, args) -> tuple:
+    """(digest_hex, alg_label) of `args` under `nonce`. Keyed when ADMISSIBILITY_ARGS_KEY is set."""
+    import hmac as _hmac
+    msg = (str(nonce or "") + ":").encode("utf-8") + canonical_args_bytes(args)
+    key = _args_key()
+    if key is not None:
+        return _hmac.new(key, msg, hashlib.sha256).hexdigest(), ARGS_DIGEST_ALG_KEYED
+    return hashlib.sha256(msg).hexdigest(), ARGS_DIGEST_ALG
+
+
+def args_match(decision: dict, args) -> bool:
+    """True when `args` are exactly the arguments the gate recorded for `decision`.
+
+    A decision with no digest (gate off, or a non-mutating tool, which never builds an envelope) has
+    nothing to hold the arguments to, so it matches trivially. Any other decision must recompute to
+    the recorded digest under the recorded nonce, compared in constant time."""
+    import hmac as _hmac
+    expected = (decision or {}).get("args_digest") or ""
+    if not expected:
+        return True
+    got, _alg = args_digest(decision.get("nonce", ""), args)
+    return _hmac.compare_digest(expected, got)
+
+
 def build_envelope(tool_name: str, args: dict, task_id=None) -> dict:
     """The ABSTRACT governance envelope — metadata only, never content (see PRIVACY FLOOR)."""
     args = args if isinstance(args, dict) else {}
@@ -466,13 +527,15 @@ def build_envelope(tool_name: str, args: dict, task_id=None) -> dict:
     raw = path or str(args.get("code") or "")
     basename = os.path.basename(path.rstrip("\\/")) if path else ""
     arg_summary = {k: f"<{type(v).__name__}:{len(str(v))}ch>" for k, v in args.items()}
+    nonce = uuid.uuid4().hex
+    digest, digest_alg = args_digest(nonce, args)
     envelope = {
         "agent_id": os.getenv("ADMISSIBILITY_AGENT_ID", "clara-01"),
         # UTC + explicit offset. Was naive local time with no suffix, which is wrong for a record meant
         # to be ordered and verified later by someone in another timezone (found 2026-08-10 while
         # formatting receipts for an external reviewer).
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "nonce": uuid.uuid4().hex,
+        "nonce": nonce,
         "policy_version": _policy_version(),   # LOCAL ruleset identity. NOT the deciding ruleset on the
                                                # external path, where the partner engine decides and
                                                # this file is never read (found by a reviewer, 08-23)
@@ -483,6 +546,11 @@ def build_envelope(tool_name: str, args: dict, task_id=None) -> dict:
         "target_type": "process" if "process" in (tool_name or "") else "local_file",
         "target_path_hash": hashlib.sha256(basename.encode()).hexdigest()[:16] if basename else "",
         "arg_summary": arg_summary,            # keys + value LENGTHS only — never values
+        # The exact-action binding (2026-10-12): a digest of the FULL arguments under this nonce. Signed
+        # with everything else, and re-checked by the executor right before dispatch. A hash, never the
+        # values; see the limit stated above ARGS_DIGEST_ALG for short or guessable values.
+        "args_digest": digest,
+        "args_digest_alg": digest_alg,
         "data_classification": "non_sensitive",
         "execution_mode": "sandbox/eval",
         "task_id": str(task_id or ""),
@@ -975,7 +1043,9 @@ def _evaluate_and_ledger(name, evaluate, envelope, local_ctx, receipt, mode):
 
 def gate(tool_name: str, args: dict, task_id=None) -> dict:
     """Adjudicate one proposed action. Returns a decision dict:
-        {verdict, reason, receipt_id, adapter, mode, enforced}
+        {verdict, reason, receipt_id, adapter, mode, enforced[, nonce, args_digest]}
+    nonce + args_digest are present whenever an envelope was built (gate on, mutating tool); the
+    executor re-checks the arguments against them immediately before dispatch (see args_match).
     Fast path: gate off / non-mutating tool → ALLOW without envelope or ledger.
     Local adapters (noop/policy) are µs and always synchronous. A REMOTE adapter (partner_a) does
     network I/O: in SHADOW its verdict is never enforced, so the call runs fire-and-forget (a daemon
@@ -1014,7 +1084,8 @@ def gate(tool_name: str, args: dict, task_id=None) -> dict:
                          args=(name, evaluate, envelope, local_ctx, receipt, mode),
                          daemon=True).start()
         return {"verdict": ALLOW, "reason": f"shadow async ({name}) — verdict logged out-of-band",
-                "receipt_id": receipt, "adapter": name, "mode": mode, "enforced": False}
+                "receipt_id": receipt, "adapter": name, "mode": mode, "enforced": False,
+                "nonce": envelope["nonce"], "args_digest": envelope["args_digest"]}
 
     # Synchronous path: enforce mode (verdict needed before proceeding) and all local adapters.
     verdict, reason = _safe_evaluate(name, evaluate, envelope, local_ctx)
@@ -1027,8 +1098,11 @@ def gate(tool_name: str, args: dict, task_id=None) -> dict:
         row["class"] = "interpreter"
     _apply_decision_signature(row)
     _ledger_append(row)
+    # nonce + args_digest travel back to the caller so the executor can re-check, at dispatch, that the
+    # arguments it is about to run are the ones this decision was made about (tool_executor._recheck).
     return {"verdict": verdict, "reason": reason, "receipt_id": receipt,
-            "adapter": name, "mode": mode, "enforced": enforced}
+            "adapter": name, "mode": mode, "enforced": enforced,
+            "nonce": envelope["nonce"], "args_digest": envelope["args_digest"]}
 
 
 _ledger_lock = threading.Lock()
@@ -1091,7 +1165,7 @@ if __name__ == "__main__":
     fails = []
     _saved = {k: os.environ.get(k) for k in
               ("ADMISSIBILITY_GATE", "ADMISSIBILITY_ADAPTER", "ADMISSIBILITY_MODE", "ADMISSIBILITY_FAIL",
-               "ADMISSIBILITY_INTERPRETER_MODE")}
+               "ADMISSIBILITY_INTERPRETER_MODE", "ADMISSIBILITY_ARGS_KEY")}
     tmpdir = tempfile.mkdtemp(prefix="adm_test_")
     _real_ledger, _real_policy = _LEDGER_PATH, _POLICY_PATH
     _LEDGER_PATH = os.path.join(tmpdir, "ledger.json")
@@ -1387,7 +1461,8 @@ if __name__ == "__main__":
         # The signature must cover the GOVERNANCE fields, not just the header. Tamper with each and
         # verification must fail — otherwise the binding is decorative.
         for _field, _bad in (("risk_class", "low"), ("irreversible", False),
-                             ("target_path_hash", "0" * 16), ("policy_version", "pol-fake")):
+                             ("target_path_hash", "0" * 16), ("policy_version", "pol-fake"),
+                             ("args_digest", "0" * 64), ("args_digest_alg", ARGS_DIGEST_ALG_KEYED)):
             _t = dict(_s); _t[_field] = _bad
             if verify_envelope(_t, _pub_b64):
                 fails.append(f"binding: tampering with {_field!r} still verifies — field not covered")
@@ -1442,6 +1517,76 @@ if __name__ == "__main__":
         pass  # cryptography absent — signing degrades, which the unconfigured case above already pins
     finally:
         os.environ.pop("ADMISSIBILITY_SIGNING_KEY", None)
+
+    # ── Exact-action binding: args_digest + the dispatch re-check helper (2026-10-12) ────────────
+    # The reviewer's question after D24: the envelope carried argument names and lengths, so how is a
+    # different value of the SAME length kept from verifying? These pin the answer, both directions.
+    os.environ.pop("ADMISSIBILITY_ARGS_KEY", None)
+    _a = {"path": r"C:\tmp\a.txt", "content": "DIGEST PROBE", "mode": "rewrite"}
+    _ea = build_envelope("write_file", _a)
+    _pub_formula = hashlib.sha256((_ea["nonce"] + ":" + json.dumps(
+        _a, sort_keys=True, separators=(",", ":"), ensure_ascii=True)).encode("utf-8")).hexdigest()
+    if _ea.get("args_digest") != _pub_formula or _ea.get("args_digest_alg") != ARGS_DIGEST_ALG:
+        fails.append("args: args_digest does not equal the documented public formula")
+    if "DIGEST PROBE" in json.dumps(_ea):
+        fails.append("args PRIVACY: an argument value reached the envelope")
+    _dec = {"nonce": _ea["nonce"], "args_digest": _ea["args_digest"]}
+    if not args_match(_dec, dict(_a)):
+        fails.append("args: identical arguments do not match their own digest")
+    if not args_match(_dec, {"mode": "rewrite", "content": "DIGEST PROBE", "path": r"C:\tmp\a.txt"}):
+        fails.append("args: reordering the keys changed the digest (canonicalisation broken)")
+    _sub = dict(_a); _sub["content"] = "DIGEST PROBX"            # same length, one character different
+    if len(_sub["content"]) != len(_a["content"]) or args_match(_dec, _sub):
+        fails.append("args: a SAME-LENGTH substitution still matches the recorded digest")
+    _sub2 = dict(_a); _sub2["path"] = r"D:\tmp\a.txt"            # same filename, another drive, same length
+    if args_match(_dec, _sub2):
+        fails.append("args: the same filename in another folder still matches")
+    _sub3 = dict(_a); _sub3["append"] = True
+    if args_match(_dec, _sub3):
+        fails.append("args: an added argument still matches")
+    if args_match({"nonce": "0" * 32, "args_digest": _ea["args_digest"]}, _a):
+        fails.append("args: the digest is not bound to its nonce")
+    if not args_match({"verdict": ALLOW, "receipt_id": ""}, {"anything": 1}):
+        fails.append("args: a decision without a digest (gate off / non-mutating) must match trivially")
+    if args_digest("n", None)[0] != args_digest("n", {})[0]:
+        fails.append("args: non-dict arguments must normalise to {} as build_envelope does")
+    # gate() hands the executor the same nonce + digest the ledger row signed.
+    _adapter_before_bind = globals()["_adapter"]
+    globals()["_adapter"] = lambda: ("noop", _noop_evaluate)
+    os.environ.update({"ADMISSIBILITY_GATE": "on", "ADMISSIBILITY_MODE": "shadow",
+                       "ADMISSIBILITY_FAIL": "open"})
+    try:
+        _gd = gate("write_file", dict(_a), task_id="t-bind")
+        _lr = [r for r in json.load(open(_LEDGER_PATH, encoding="utf-8"))["decisions"]
+               if r.get("receipt_id") == _gd.get("receipt_id")]
+        if not _lr or _gd.get("args_digest") != _lr[-1]["envelope"].get("args_digest") \
+                or _gd.get("nonce") != _lr[-1]["envelope"].get("nonce"):
+            fails.append("args: gate() did not return the nonce + digest its ledger row recorded")
+        if not args_match(_gd, _a) or args_match(_gd, _sub):
+            fails.append("args: gate()'s decision does not hold the arguments it was made about")
+        if "DIGEST PROBE" in json.dumps(_lr[-1] if _lr else {}):
+            fails.append("args PRIVACY: an argument value reached the ledger row")
+        if gate("read_file", {"path": "x"}).get("args_digest"):
+            fails.append("args: a non-mutating tool must not carry a digest")
+    finally:
+        globals()["_adapter"] = _adapter_before_bind
+    # Keyed mode closes the guessable-value limit: a reader without the key cannot confirm a guess.
+    os.environ["ADMISSIBILITY_ARGS_KEY"] = "self-test-only-key"
+    try:
+        _ek = build_envelope("write_file", _a)
+        _ek_pub = hashlib.sha256((_ek["nonce"] + ":" + json.dumps(
+            _a, sort_keys=True, separators=(",", ":"), ensure_ascii=True)).encode("utf-8")).hexdigest()
+        if _ek.get("args_digest_alg") != ARGS_DIGEST_ALG_KEYED:
+            fails.append("args keyed: alg label not switched to the keyed form")
+        if _ek.get("args_digest") == _ek_pub:
+            fails.append("args keyed: digest equals the public formula, so a guess is still confirmable")
+        _kdec = {"nonce": _ek["nonce"], "args_digest": _ek["args_digest"]}
+        if not args_match(_kdec, _a) or args_match(_kdec, _sub):
+            fails.append("args keyed: the keyed digest does not hold its arguments")
+    finally:
+        os.environ.pop("ADMISSIBILITY_ARGS_KEY", None)
+    if args_match(_kdec, _a):
+        fails.append("args keyed: a keyed digest matched WITHOUT the key")
 
     # ── Consequence ceiling + partner C scan payload ─────────────────────────────
     # The floor rule must be a real max() over an ordered scale. The cases that matter are the ones a
@@ -1525,6 +1670,9 @@ if __name__ == "__main__":
     for leak in ("ML_PROJECTS", "note.txt", "drill_workspace", "E:\\\\"):
         if leak in _blob:
             fails.append(f"scan PRIVACY FLOOR BREACH: raw target detail {leak!r} present in payload")
+    # The argument digest stays local: it is for whoever is handed the ledger row, not a remote engine.
+    if _env["args_digest"] in _blob:
+        fails.append("scan: the argument digest reached the partner C payload")
 
     # (f) verdict mapping, both vocabularies. CONTESTED has no external equivalent, so the external
     #     fallback must not flatten it to ALLOW.
