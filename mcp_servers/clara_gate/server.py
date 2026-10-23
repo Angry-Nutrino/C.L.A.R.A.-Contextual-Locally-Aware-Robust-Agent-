@@ -58,9 +58,8 @@ LEDGER_PATH = os.path.expanduser(os.environ.get(
 adm._LEDGER_PATH = LEDGER_PATH
 if os.environ.get("CLARA_GATE_POLICY", "").strip():
     adm._POLICY_PATH = os.path.abspath(os.path.expanduser(os.environ["CLARA_GATE_POLICY"]))
-# The gate's loader treats an unreadable policy as {} and then defaults to ALLOW, which is right for CLARA's
-# own startup (startup_check covers it there) and silently fail-open here. So a policy this server cannot
-# read stops it from starting at all.
+# The gate's loader treats an unreadable policy as {} and then defaults to ALLOW, which would make this
+# server silently fail-open. So a policy this server cannot read stops it from starting at all.
 try:
     with open(adm._POLICY_PATH, encoding="utf-8") as _fh:
         _policy_doc = json.load(_fh)
